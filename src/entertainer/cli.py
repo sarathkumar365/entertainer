@@ -157,6 +157,8 @@ def data_prune(
     """Apply per-language vote floors, after TMDB has supplied the languages."""
     from .data import catalog
 
+    if not dry_run:
+        catalog.recalibrate_quality()
     before, after = catalog.prune_by_language(scale=scale, dry_run=dry_run)
     verb = "would remove" if dry_run else "removed"
     console.print(f"[green]{before:,} -> {after:,}[/green] ({verb} {before - after:,})")

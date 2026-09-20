@@ -257,3 +257,121 @@ def test_rebuild_from_empty_carries_nothing_and_does_not_fail(mini_dumps, tmp_pa
     monkeypatch.setattr(catalog, "PATHS", P)
     assert catalog.build_base(min_votes=100) == 4
     assert catalog.build_base(min_votes=100) == 4
+
+
+def test_quality_is_recalibrated_against_each_language(mini_dumps, tmp_path, monkeypatch):
+    """Two films equally regarded within their own industry should score alike.
+
+    A global mean makes the quality feature a partial proxy for language,
+    which the preference model then cannot separate from actually liking that
+    language's films.
+    """
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "q.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    catalog.build_base(min_votes=50)
+
+    con = store.connect()
+    con.execute("DELETE FROM titles")
+    # One industry rates everything a point higher than the other.
+    rows = []
+    for i in range(500):
+        rows.append((i, f"ttA{i:06d}", "en", 6.0 + (i % 10) * 0.1, 50_000))
+    for i in range(500, 1000):
+        rows.append((i, f"ttB{i:06d}", "ml", 7.0 + (i % 10) * 0.1, 50_000))
+    con.executemany(
+        "INSERT INTO titles (item_id, imdb_id, language, imdb_rating, imdb_votes, kind, title) "
+        "VALUES (?, ?, ?, ?, ?, 'movie', 'x')",
+        rows,
+    )
+    con.close()
+
+    catalog.recalibrate_quality(min_titles=100)
+
+    con = store.connect(read_only=True)
+    means = dict(
+        con.execute("SELECT language, avg(quality) FROM titles GROUP BY 1").fetchall()
+    )
+    con.close()
+    # After standardisation the two industries' averages sit close together,
+    # despite a full point of difference in raw ratings.
+    assert abs(means["en"] - means["ml"]) < 0.02, means
+
+
+def test_quality_still_ranks_within_a_language(mini_dumps, tmp_path, monkeypatch):
+    """Standardising across industries must not flatten ranking inside one."""
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "q2.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    catalog.build_base(min_votes=50)
+
+    con = store.connect()
+    con.execute("DELETE FROM titles")
+    rows = [
+        (i, f"ttC{i:06d}", "ml", 5.0 + (i % 50) * 0.1, 80_000)
+        for i in range(400)
+    ]
+    con.executemany(
+        "INSERT INTO titles (item_id, imdb_id, language, imdb_rating, imdb_votes, kind, title) "
+        "VALUES (?, ?, ?, ?, ?, 'movie', 'x')",
+        rows,
+    )
+    con.close()
+    catalog.recalibrate_quality(min_titles=100)
+
+    con = store.connect(read_only=True)
+    pairs = con.execute(
+        "SELECT imdb_rating, quality FROM titles ORDER BY imdb_rating"
+    ).fetchall()
+    con.close()
+    ratings = [p[0] for p in pairs]
+    qualities = [p[1] for p in pairs]
+    # Monotone in the raw rating, within a single language.
+    assert qualities == sorted(qualities)
+    assert qualities[-1] > qualities[0]
+    assert ratings[-1] > ratings[0]
+
+
+def test_shrinkage_protects_against_tiny_vote_counts(mini_dumps):
+    from entertainer.data.catalog import shrink_rating
+
+    enthusiastic = shrink_rating(9.8, 40, prior_mean=6.4)
+    canonical = shrink_rating(8.4, 500_000, prior_mean=6.4)
+    assert enthusiastic is not None and canonical is not None
+    assert canonical > enthusiastic, (canonical, enthusiastic)
+    assert shrink_rating(None, 100, 6.4) is None
+    assert shrink_rating(8.0, 0, 6.4) is None
