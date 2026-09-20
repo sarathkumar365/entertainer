@@ -127,6 +127,44 @@ PRIORITY_LANGUAGES: dict[str, str] = {
     "mr": "Marathi",
 }
 
+# Names for every language code TMDB is likely to return. The item card is
+# prose fed to a text encoder, and "a Mandarin-language film" carries meaning
+# to a multilingual model in a way that "a cmn-language film" does not.
+LANGUAGE_NAMES: dict[str, str] = {
+    "ab": "Abkhaz", "af": "Afrikaans", "am": "Amharic", "ar": "Arabic",
+    "as": "Assamese", "az": "Azerbaijani", "be": "Belarusian", "bg": "Bulgarian",
+    "bn": "Bengali", "bo": "Tibetan", "bs": "Bosnian", "ca": "Catalan",
+    "cn": "Cantonese", "cmn": "Mandarin", "cs": "Czech", "cy": "Welsh",
+    "da": "Danish", "de": "German", "dz": "Dzongkha", "el": "Greek",
+    "en": "English", "eo": "Esperanto", "es": "Spanish", "et": "Estonian",
+    "eu": "Basque", "fa": "Persian", "fi": "Finnish", "fr": "French",
+    "ga": "Irish", "gl": "Galician", "gu": "Gujarati", "he": "Hebrew",
+    "hi": "Hindi", "hr": "Croatian", "hu": "Hungarian", "hy": "Armenian",
+    "id": "Indonesian", "is": "Icelandic", "it": "Italian", "ja": "Japanese",
+    "jv": "Javanese", "ka": "Georgian", "kk": "Kazakh", "km": "Khmer",
+    "kn": "Kannada", "ko": "Korean", "ku": "Kurdish", "ky": "Kyrgyz",
+    "la": "Latin", "lb": "Luxembourgish", "lo": "Lao", "lt": "Lithuanian",
+    "lv": "Latvian", "mk": "Macedonian", "ml": "Malayalam", "mn": "Mongolian",
+    "mr": "Marathi", "ms": "Malay", "mt": "Maltese", "my": "Burmese",
+    "ne": "Nepali", "nl": "Dutch", "no": "Norwegian", "nb": "Norwegian",
+    "pa": "Punjabi", "pl": "Polish", "ps": "Pashto", "pt": "Portuguese",
+    "ro": "Romanian", "ru": "Russian", "sh": "Serbo-Croatian", "si": "Sinhala",
+    "sk": "Slovak", "sl": "Slovenian", "so": "Somali", "sq": "Albanian",
+    "sr": "Serbian", "sv": "Swedish", "sw": "Swahili", "ta": "Tamil",
+    "te": "Telugu", "tg": "Tajik", "th": "Thai", "tl": "Tagalog",
+    "tr": "Turkish", "uk": "Ukrainian", "ur": "Urdu", "uz": "Uzbek",
+    "vi": "Vietnamese", "xx": "unknown-language", "yi": "Yiddish",
+    "zh": "Chinese", "zu": "Zulu",
+}
+
+
+def language_label(code: str | None) -> str:
+    """Human-readable language name, falling back to the raw code."""
+    if not code:
+        return ""
+    return LANGUAGE_NAMES.get(code, PRIORITY_LANGUAGES.get(code, code))
+
+
 # IMDb regions that stand in for a language when no language tag is available.
 REGION_TO_LANGUAGE = {
     "IN": None,  # ambiguous, resolved via akas language column

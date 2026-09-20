@@ -36,3 +36,20 @@ def test_original_title_included_when_different():
 def test_overview_is_truncated():
     row = dict(BASE, overview="x" * 5000)
     assert len(build_card(row)) < 2000
+
+
+def test_language_names_cover_more_than_the_priority_list():
+    """The card is prose fed to a text encoder; a bare ISO code carries nothing."""
+    row = dict(BASE, language="cmn", title="Some Film")
+    assert "Mandarin-language film" in build_card(row)
+    assert "Swahili" in build_card(dict(BASE, language="sw"))
+
+
+def test_unknown_language_is_omitted_rather_than_named_as_unknown():
+    card = build_card(dict(BASE, language="xx"))
+    assert "unknown-language" not in card
+    assert card.startswith("Kumbalangi Nights")
+
+
+def test_unrecognised_code_falls_back_to_itself():
+    assert "qqq" in build_card(dict(BASE, language="qqq"))

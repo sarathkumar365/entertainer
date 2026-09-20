@@ -19,7 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import store
-from .config import PATHS, PRIORITY_LANGUAGES, has_tmdb
+from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
 from .resolve import Match, resolve_one, search
 
@@ -197,7 +197,7 @@ def data_prune(
     if not dry_run:
         table = Table("language", "titles")
         for lang, count in catalog.language_histogram(25):
-            table.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{count:,}")
+            table.add_row(f"{lang} ({language_label(lang)})", f"{count:,}")
         console.print(table)
 
 
@@ -210,7 +210,7 @@ def data_build(min_votes: int = typer.Option(50, help="Flat IMDb vote floor at b
     console.print(f"[green]{n:,} titles[/green]")
     table = Table("language", "titles")
     for lang, count in catalog.language_histogram(20):
-        table.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{count:,}")
+        table.add_row(f"{lang} ({language_label(lang)})", f"{count:,}")
     console.print(table)
 
 
@@ -667,7 +667,7 @@ def onboard(
             if row.get("original_title") and row["original_title"] != row["title"]:
                 label += f" [dim]({row['original_title']})[/dim]"
             tail = ", ".join(
-                str(x) for x in (row.get("year"), PRIORITY_LANGUAGES.get(row.get("language"), row.get("language")),
+                str(x) for x in (row.get("year"), language_label(row.get("language")),
                                  "series" if row.get("kind") == "tv" else None) if x
             )
             console.print(f"\n[cyan]{answered_count + 1}/{questions}[/cyan]  {label}  [dim]{tail}[/dim]")
@@ -781,7 +781,7 @@ def recs(
             head += f" [dim]({row['original_title']})[/dim]"
         facts = [str(row["year"])] if row.get("year") else []
         if row.get("language"):
-            facts.append(PRIORITY_LANGUAGES.get(row["language"], row["language"]))
+            facts.append(language_label(row["language"]))
         if row.get("kind") == "tv":
             facts.append("series")
         if row.get("runtime"):
@@ -995,7 +995,7 @@ def stats() -> None:
     console.print(t2)
     t3 = Table("language", "titles")
     for lang, n in langs:
-        t3.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{n:,}")
+        t3.add_row(f"{lang} ({language_label(lang)})", f"{n:,}")
     console.print(t3)
 
 

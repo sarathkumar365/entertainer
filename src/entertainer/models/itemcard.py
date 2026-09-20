@@ -13,7 +13,7 @@ whether someone likes a film, and none of them appear in a tag vocabulary.
 
 from __future__ import annotations
 
-from ..config import PRIORITY_LANGUAGES
+from ..config import language_label
 
 _MAX_OVERVIEW = 900
 
@@ -24,9 +24,7 @@ def _people(row: dict, key: str, limit: int) -> list[str]:
 
 
 def language_name(code: str | None) -> str:
-    if not code:
-        return ""
-    return PRIORITY_LANGUAGES.get(code, code)
+    return language_label(code)
 
 
 def build_card(row: dict) -> str:
@@ -35,6 +33,8 @@ def build_card(row: dict) -> str:
     year = row.get("year")
     kind = "series" if row.get("kind") == "tv" else "film"
     lang = language_name(row.get("language"))
+    if lang == "unknown-language":
+        lang = ""
     runtime = row.get("runtime")
 
     head = title
