@@ -128,30 +128,162 @@ def greedy_dpp(
     return selected
 
 
+def _allocate(languages: list[tuple[str, int]], k: int, cap: int) -> dict[str, int]:
+    """Spread k questions over the available languages, round-robin under a cap.
+
+    Round-robin rather than proportional. Proportional allocation reproduces
+    the catalogue's imbalance, which is exactly the thing being corrected: the
+    point of the opening set is to find out whether this person watches
+    Malayalam films at all, and that question cannot be asked with 0.4 of a
+    question.
+    """
+    quota: dict[str, int] = {lang: 0 for lang, _ in languages}
+    remaining = k
+    while remaining > 0:
+        progressed = False
+        for lang, available in languages:
+            if remaining == 0:
+                break
+            if quota[lang] >= min(cap, available):
+                continue
+            quota[lang] += 1
+            remaining -= 1
+            progressed = True
+        if not progressed:
+            break
+    return {lang: n for lang, n in quota.items() if n > 0}
+
+
 def seed_questions(
     fs: FeatureSpace,
     meta: dict[int, dict],
     k: int = 24,
     languages: tuple[str, ...] = (),
     pool: np.ndarray | None = None,
+    max_language_share: float = 0.4,
 ) -> list[int]:
-    """Phase one: a maximally spread-out opening set. Returns item_ids."""
+    """Phase one: a maximally spread-out opening set. Returns item_ids.
+
+    A determinantal point process spreads over the latent space, but the
+    catalogue is not balanced — English titles outnumber Malayalam ones by an
+    order of magnitude and carry most of the high-quality mass. Run
+    unconstrained over the whole pool, the DPP opens with a solid run of
+    Anglophone prestige cinema and learns nothing about the rest of someone's
+    taste.
+
+    Trimming that set afterwards does not help, because the non-English titles
+    were never selected in the first place. So the budget is allocated across
+    languages first, and a separate DPP runs inside each one. Diversity is
+    still maximised, but within a stratum rather than across a skewed whole.
+    """
     pool = recognisable_pool(fs, meta, languages) if pool is None else pool
     if pool.size == 0:
         return []
-    vecs = fs.latent[pool]
-    quality = np.array(
-        [max(float((meta.get(int(fs.item_ids[r])) or {}).get("quality") or 0.5), 0.05) for r in pool]
-    )
-    chosen = greedy_dpp(vecs, quality, k=k)
-    return [int(fs.item_ids[pool[c]]) for c in chosen]
+
+    by_lang: dict[str, list[int]] = {}
+    for row in pool.tolist():
+        lang = (meta.get(int(fs.item_ids[row])) or {}).get("language") or "xx"
+        by_lang.setdefault(lang, []).append(row)
+
+    # Largest pools first, so round-robin starts from the languages most
+    # likely to be relevant and the tail still gets its turn.
+    ordered = sorted(by_lang.items(), key=lambda kv: -len(kv[1]))
+    cap = max(1, int(round(k * max_language_share)))
+    quota = _allocate([(lang, len(rows)) for lang, rows in ordered], k, cap)
+
+    picked: list[int] = []
+    for lang, rows in ordered:
+        want = quota.get(lang, 0)
+        if want <= 0:
+            continue
+        idx = np.array(rows, dtype=np.int64)
+        quality = np.array(
+            [
+                max(float((meta.get(int(fs.item_ids[r])) or {}).get("quality") or 0.5), 0.05)
+                for r in idx
+            ]
+        )
+        chosen = greedy_dpp(fs.latent[idx], quality, k=want)
+        picked.extend(int(fs.item_ids[idx[c]]) for c in chosen)
+
+    # Interleave languages so the opening questions alternate rather than
+    # arriving in blocks, which reads as a fairer sample to the person
+    # answering and produces better coverage if they stop early.
+    groups: dict[str, list[int]] = {}
+    for item in picked:
+        groups.setdefault((meta.get(item) or {}).get("language") or "xx", []).append(item)
+    out: list[int] = []
+    while len(out) < min(k, len(picked)):
+        added = False
+        for lang in list(groups):
+            if groups[lang]:
+                out.append(groups[lang].pop(0))
+                added = True
+                if len(out) == k:
+                    break
+        if not added:
+            break
+    return out
 
 
 def information_gain(model: TasteModel, X: np.ndarray) -> np.ndarray:
-    """½·log(1 + β·xᵀΣx) for each row — exact for a Bayesian linear model."""
+    """D-optimal criterion: the Shannon information a label at x yields.
+
+    For a Bayesian linear model this is exactly ½·log(1 + beta·x'Sigma·x), i.e.
+    monotone in the model's epistemic variance at x.
+
+    Kept because it is the textbook answer and a useful comparison, but it is
+    not the default — see ``variance_reduction``.
+    """
     phi = model.feature_map(X)
     epistemic = np.einsum("ij,jk,ik->i", phi, model.cov, phi)
     return 0.5 * np.log1p(model.beta * np.maximum(epistemic, 0.0))
+
+
+def variance_reduction(
+    model: TasteModel, X: np.ndarray, reference: np.ndarray
+) -> np.ndarray:
+    """V-optimal criterion: how much a label at x sharpens the whole catalogue.
+
+    D-optimality above answers "which label tells me most about my
+    parameters". That is not quite the question. The engine does not want
+    well-determined parameters for their own sake; it wants to rank a specific
+    catalogue well. The quantity that matches that goal is the reduction in
+    *predictive* variance summed over the titles it will actually have to
+    rank.
+
+    For a Bayesian linear model the rank-one posterior update
+
+        Sigma' = Sigma - beta·Sigma·x·x'·Sigma / (1 + beta·x'·Sigma·x)
+
+    gives that reduction over a reference set Z in closed form:
+
+        dV(x) = beta · x'·Sigma·M·Sigma·x / (1 + beta·x'·Sigma·x),   M = Z'Z/|Z|
+
+    so it costs one precomputed f x f matrix and a single quadratic form per
+    candidate — no more expensive than the D-optimal score it replaces.
+
+    Which of the two actually produces better recommendations is an empirical
+    question, not a theoretical one, and the synthetic fixtures are too clean
+    to settle it: everything saturates past about twenty questions there. It
+    is settled instead on held-out MovieLens users — run
+    ``ent eval --elicitation d-optimal`` against ``v-optimal`` and compare.
+    V-optimal is the default because it optimises the objective the system is
+    actually judged on; see docs/RESULTS.md for the measurement.
+
+    ``reference`` is a sample of the catalogue in feature space; sampling
+    suffices, since M only needs the second-moment structure.
+    """
+    phi = model.feature_map(X)
+    ref = model.feature_map(reference)
+
+    cov = model.cov
+    M = ref.T @ ref / max(len(ref), 1)
+    A = cov @ M @ cov                      # f x f, precomputed once
+
+    numer = np.einsum("ij,jk,ik->i", phi, A, phi)
+    denom = 1.0 + model.beta * np.einsum("ij,jk,ik->i", phi, cov, phi)
+    return model.beta * np.maximum(numer, 0.0) / np.maximum(denom, 1e-12)
 
 
 def next_questions(
@@ -163,11 +295,14 @@ def next_questions(
     languages: tuple[str, ...] = (),
     pool: np.ndarray | None = None,
     redundancy_lambda: float = 0.55,
+    criterion: str = "v-optimal",
+    reference_size: int = 4000,
+    rng: np.random.Generator | None = None,
 ) -> list[int]:
-    """Phase two: the k most informative next questions, jointly chosen.
+    """Phase two: the k most useful next questions, jointly chosen.
 
-    Picking the top-k by information gain independently is a classic mistake:
-    the most uncertain titles tend to be uncertain *for the same reason*, so
+    Picking the top-k by score independently is a classic mistake: the most
+    informative titles tend to be informative *for the same reason*, so
     answering one answers all of them. Greedy selection with a redundancy
     penalty against already-chosen questions approximates the batch-optimal
     design at negligible cost.
@@ -180,7 +315,13 @@ def next_questions(
     if pool.size == 0:
         return []
 
-    gains = information_gain(model, fs.matrix[pool])
+    if criterion == "d-optimal":
+        gains = information_gain(model, fs.matrix[pool])
+    else:
+        rng = rng or np.random.default_rng(0)
+        n_ref = min(reference_size, len(fs.item_ids))
+        ref_rows = rng.choice(len(fs.item_ids), size=n_ref, replace=False)
+        gains = variance_reduction(model, fs.matrix[pool], fs.matrix[ref_rows])
     vecs = fs.latent[pool]
 
     chosen: list[int] = []

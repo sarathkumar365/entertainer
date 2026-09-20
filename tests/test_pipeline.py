@@ -174,32 +174,96 @@ def test_thompson_sampling_explores_more_than_greedy(world):
     assert len(set.union(*sampled)) > len(set.union(*greedy))
 
 
-def test_active_elicitation_beats_random_questioning(world):
-    """The whole justification for the question-selection machinery."""
+def test_active_elicitation_beats_random_at_a_small_budget(world):
+    """The justification for the question-selection machinery.
+
+    Measured at ten questions, which is where it matters. Given enough
+    answers, any reasonable selection converges to the same place and the
+    comparison stops being meaningful — this synthetic world saturates past
+    about twenty. The real comparison lives in the MovieLens replay.
+    """
     fs, meta, reward = world["fs"], world["meta"], world["reward"]
     pool = np.arange(N_ITEMS)
-    held = np.arange(N_ITEMS)
+    budget = 10
 
-    active_scores, random_scores = [], []
-    for trial in range(5):
-        rng = np.random.default_rng(100 + trial)
+    active, random_ = [], []
+    for trial in range(8):
+        rng = np.random.default_rng(300 + trial)
 
-        seeds = elicit.seed_questions(fs, meta, k=8, pool=pool)
-        answered = list(seeds)
+        answered = list(elicit.seed_questions(fs, meta, k=6, pool=pool))
         model = fit(fs.vectors_for(answered), reward[answered], allow_rff=False)
-        for _ in range(3):
-            batch = elicit.next_questions(model, fs, meta, set(answered), k=6, pool=pool)
+        while len(answered) < budget:
+            batch = elicit.next_questions(
+                model, fs, meta, set(answered), k=budget - len(answered), pool=pool, rng=rng
+            )
+            if not batch:
+                break
             answered.extend(batch)
             model = fit(fs.vectors_for(answered), reward[answered], allow_rff=False)
-        pred = model.predict(fs.matrix[held], with_std=False)
-        active_scores.append(np.corrcoef(pred, reward[held])[0, 1])
+        active.append(
+            np.corrcoef(model.predict(fs.matrix, with_std=False), reward)[0, 1]
+        )
 
-        rnd = rng.choice(N_ITEMS, size=len(answered), replace=False)
-        rmodel = fit(fs.vectors_for(rnd), reward[rnd], allow_rff=False)
-        rpred = rmodel.predict(fs.matrix[held], with_std=False)
-        random_scores.append(np.corrcoef(rpred, reward[held])[0, 1])
+        chosen = rng.choice(N_ITEMS, size=len(answered), replace=False)
+        rmodel = fit(fs.vectors_for(chosen), reward[chosen], allow_rff=False)
+        random_.append(
+            np.corrcoef(rmodel.predict(fs.matrix, with_std=False), reward)[0, 1]
+        )
 
-    assert np.mean(active_scores) > np.mean(random_scores)
+    assert np.mean(active) > np.mean(random_)
+
+
+def test_v_optimal_score_matches_a_brute_force_posterior_update(world):
+    """The closed form must equal what an explicit rank-one update produces.
+
+    This is the check that matters for the V-optimal criterion: the algebra
+    collapses a per-candidate posterior update into one quadratic form, and a
+    sign or transpose error there would be invisible in any end-to-end metric.
+    """
+    from entertainer.coldstart.elicit import variance_reduction
+
+    fs, reward = world["fs"], world["reward"]
+    rng = np.random.default_rng(2)
+    train = rng.choice(N_ITEMS, size=30, replace=False)
+    model = fit(fs.vectors_for(train), reward[train], allow_rff=False)
+
+    candidates = rng.choice(N_ITEMS, size=15, replace=False)
+    reference = fs.matrix[rng.choice(N_ITEMS, size=200, replace=False)]
+
+    closed_form = variance_reduction(model, fs.matrix[candidates], reference)
+
+    phi_ref = model.feature_map(reference)
+    cov = model.cov
+    brute = []
+    for c in candidates:
+        x = model.feature_map(fs.matrix[c : c + 1])[0]
+        denom = 1.0 + model.beta * float(x @ cov @ x)
+        cov_after = cov - model.beta * np.outer(cov @ x, x @ cov) / denom
+        before = np.einsum("ij,jk,ik->i", phi_ref, cov, phi_ref).sum()
+        after = np.einsum("ij,jk,ik->i", phi_ref, cov_after, phi_ref).sum()
+        brute.append((before - after) / len(phi_ref))
+
+    assert np.allclose(closed_form, brute, rtol=1e-6, atol=1e-12)
+
+
+def test_both_elicitation_criteria_produce_distinct_usable_batches(world):
+    fs, meta = world["fs"], world["meta"]
+    reward = world["reward"]
+    pool = np.arange(N_ITEMS)
+    rng = np.random.default_rng(4)
+    train = rng.choice(N_ITEMS, size=25, replace=False)
+    model = fit(fs.vectors_for(train), reward[train], allow_rff=False)
+
+    d_picks = elicit.next_questions(
+        model, fs, meta, set(train.tolist()), k=12, pool=pool, criterion="d-optimal"
+    )
+    v_picks = elicit.next_questions(
+        model, fs, meta, set(train.tolist()), k=12, pool=pool, criterion="v-optimal", rng=rng
+    )
+    for picks in (d_picks, v_picks):
+        assert len(picks) == len(set(picks)) == 12
+        assert not (set(picks) & set(train.tolist()))
+    assert set(d_picks) != set(v_picks), "the two criteria should not coincide exactly"
 
 
 def test_discovered_axes_name_the_planted_structure(world):
@@ -266,3 +330,19 @@ def test_novelty_penalty_shifts_towards_less_seen_titles(world):
         return np.mean([meta[p.item_id]["imdb_votes"] for p in picks])
 
     assert mean_votes(1.5) < mean_votes(0.0)
+
+
+def test_feature_space_survives_entirely_missing_metadata():
+    """A feature nobody has must contribute zero, never NaN."""
+    from entertainer.models.features import build as build_features
+
+    rng = np.random.default_rng(0)
+    latent = rng.normal(size=(50, 12)).astype(np.float32)
+    latent /= np.linalg.norm(latent, axis=1, keepdims=True)
+    ids = np.arange(50, dtype=np.int32)
+    # No year, no runtime, no quality anywhere.
+    meta = {int(i): {"language": "en", "imdb_votes": 1000} for i in ids}
+
+    fs = build_features(ids, latent, meta)
+    assert np.isfinite(fs.matrix).all()
+    assert np.allclose(fs.side[:, 0], 0.0)

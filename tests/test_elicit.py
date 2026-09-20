@@ -58,3 +58,28 @@ def test_next_questions_are_distinct_and_unasked():
     picks = next_questions(model, fs, meta, asked, k=10, pool=np.arange(300))
     assert len(picks) == len(set(picks)) == 10
     assert not (set(picks) & asked)
+
+
+def test_seed_questions_do_not_collapse_onto_one_language():
+    """Guards the failure mode where the opening set is all English."""
+    from collections import Counter
+
+    from entertainer.coldstart.elicit import seed_questions
+
+    fs = _space(n=600, d=24, seed=2)
+    rng = np.random.default_rng(3)
+    meta = {}
+    for i in fs.item_ids.tolist():
+        # A catalogue shaped like the real one: English dominates in both
+        # count and quality.
+        english = i < 480
+        meta[int(i)] = {
+            "imdb_votes": int(rng.integers(50_000, 900_000)) if english else int(rng.integers(5_000, 60_000)),
+            "language": "en" if english else ["ml", "ta", "ko"][i % 3],
+            "quality": float(rng.uniform(0.7, 0.95)) if english else float(rng.uniform(0.4, 0.7)),
+        }
+    picks = seed_questions(fs, meta, k=20, pool=np.arange(600), max_language_share=0.4)
+    assert len(picks) == 20
+    counts = Counter(meta[p]["language"] for p in picks)
+    assert counts["en"] <= 8, counts
+    assert len(counts) >= 3, counts

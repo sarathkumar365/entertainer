@@ -60,6 +60,7 @@ class SimConfig:
     max_asks: int = 400
     seed: int = 0
     seed_questions: int = 12
+    criterion: str = "v-optimal"   # v-optimal | d-optimal
 
 
 @dataclass
@@ -153,7 +154,8 @@ def _run_elicitation(
             rewards = np.array([a[1] for a in answered])
             model = fit_taste(fs.vectors_for(ids), rewards, allow_rff=False)
             batch = elicit.next_questions(
-                model, fs, meta, asked, k=cfg.seed_questions, pool=pool
+                model, fs, meta, asked, k=cfg.seed_questions, pool=pool,
+                criterion=cfg.criterion, rng=rng,
             )
         if not batch:
             break
@@ -262,8 +264,11 @@ def run(
     histories: dict[int, dict[int, float]],
     cfg: SimConfig,
     arms: Sequence[str] = tuple(ARMS),
-    elicitation: str = "active",
+    elicitation: str = "v-optimal",
 ) -> dict[str, ArmResult]:
+    """``elicitation``: v-optimal | d-optimal | random."""
+    if elicitation in ("v-optimal", "d-optimal"):
+        cfg = SimConfig(**{**cfg.__dict__, "criterion": elicitation})
     rng = np.random.default_rng(cfg.seed)
     results = {name: ArmResult(name) for name in arms}
 
@@ -287,11 +292,10 @@ def run(
                 bar.advance(task)
                 continue
 
-            answered = (
-                _run_elicitation(fs, meta, known, cfg, pool, rng)
-                if elicitation == "active"
-                else _random_elicitation(known, cfg, rng)
-            )
+            if elicitation == "random":
+                answered = _random_elicitation(known, cfg, rng)
+            else:
+                answered = _run_elicitation(fs, meta, known, cfg, pool, rng)
             if len(answered) < 3:
                 bar.advance(task)
                 continue

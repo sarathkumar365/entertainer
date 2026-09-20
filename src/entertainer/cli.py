@@ -932,7 +932,10 @@ def audit(
 def evaluate(
     users: int = typer.Option(300, help="How many held-out MovieLens users to replay."),
     budget: int = typer.Option(30, help="Answered questions each simulated user gives."),
-    elicitation: str = typer.Option("active", help="active | random"),
+    elicitation: str = typer.Option(
+        "v-optimal",
+        help="Question-selection criterion: v-optimal | d-optimal | random (control).",
+    ),
     out: Path | None = typer.Option(None, help="Write the full report as JSON."),
 ) -> None:
     """Benchmark the engine against baselines on held-out MovieLens users."""

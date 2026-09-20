@@ -66,7 +66,17 @@ class FeatureSpace:
 
 
 def _standardise(col: np.ndarray) -> np.ndarray:
-    mu, sd = float(np.nanmean(col)), float(np.nanstd(col))
+    """Centre and scale, tolerating a column that is entirely absent.
+
+    A feature nobody in the catalogue has — runtime on a catalogue of series,
+    say, or quality before the first build — must contribute nothing rather
+    than NaN. A single NaN here propagates through the fused matrix into every
+    prediction, and does so silently.
+    """
+    observed = col[~np.isnan(col)]
+    if observed.size == 0:
+        return np.zeros_like(col, dtype=np.float64)
+    mu, sd = float(observed.mean()), float(observed.std())
     out = (np.nan_to_num(col, nan=mu) - mu) / (sd if sd > 1e-9 else 1.0)
     # Side features enter on the same scale as a single latent axis, so that
     # the prior does not implicitly favour them.
