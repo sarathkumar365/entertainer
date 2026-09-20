@@ -19,6 +19,8 @@ The output is used as a *feature space*, not as a ranker. See ``fusion.py``.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import polars as pl
 import scipy.sparse as sp
@@ -28,12 +30,26 @@ from ..config import CF_FACTORS, PATHS
 
 console = Console()
 
-# Ratings at or above this are treated as positive implicit feedback. 3.5 on
-# MovieLens' 0.5..5 scale is the conventional cut: it keeps "liked" distinct
-# from "watched and shrugged".
-POSITIVE_THRESHOLD = 3.5
+# Two ways to read a MovieLens rating.
+#
+# The conventional implicit-feedback recipe keeps only ratings at or above
+# 3.5 and treats them as ones. That reads the matrix as "who liked what".
+#
+# The alternative reads it as "who watched what", keeping every rating and
+# grading the confidence by how much they liked it. It is the better choice
+# here, for a reason specific to how these factors get used. They are not a
+# ranker — they are a feature space, and the ridge map in ``fusion.py`` has
+# to learn to predict them from text for the ~80% of the catalogue MovieLens
+# never covered. Coverage of the *map's training set* therefore matters more
+# than purity of the signal: liked-only yields factors for 30,810 titles,
+# co-watch for 55,420. Eighty per cent more supervision for the map, and the
+# preference information is not lost, only demoted from a hard filter to a
+# confidence weight.
+WATCH_CONFIDENCE = 0.3     # someone watched it and disliked it: still a co-watch
+LIKE_CONFIDENCE = 1.7      # additional confidence at the top of the scale
+POSITIVE_THRESHOLD = 3.5   # only used by signal="liked"
 MIN_USER_RATINGS = 10
-MIN_ITEM_RATINGS = 5
+MIN_ITEM_RATINGS = 3
 
 
 def _ratings_path():
@@ -52,13 +68,17 @@ def load_ratings() -> pl.DataFrame:
 
 def build_matrix(
     df: pl.DataFrame,
+    signal: str = "watched",
     positive_threshold: float = POSITIVE_THRESHOLD,
+    min_user_ratings: int = MIN_USER_RATINGS,
+    min_item_ratings: int = MIN_ITEM_RATINGS,
 ) -> tuple[sp.csr_matrix, np.ndarray, np.ndarray]:
     """Return (user x item CSR of confidences, user ids, movielens item ids)."""
-    df = df.filter(pl.col("rating") >= positive_threshold)
+    if signal == "liked":
+        df = df.filter(pl.col("rating") >= positive_threshold)
 
-    ucount = df.group_by("userId").len().filter(pl.col("len") >= MIN_USER_RATINGS)
-    icount = df.group_by("movieId").len().filter(pl.col("len") >= MIN_ITEM_RATINGS)
+    ucount = df.group_by("userId").len().filter(pl.col("len") >= min_user_ratings)
+    icount = df.group_by("movieId").len().filter(pl.col("len") >= min_item_ratings)
     df = df.join(ucount.select("userId"), on="userId").join(icount.select("movieId"), on="movieId")
 
     users = np.sort(df["userId"].unique().to_numpy())
@@ -69,8 +89,14 @@ def build_matrix(
     rows = np.fromiter((uidx[u] for u in df["userId"].to_list()), dtype=np.int32, count=df.height)
     cols = np.fromiter((iidx[m] for m in df["movieId"].to_list()), dtype=np.int32, count=df.height)
 
-    # Confidence grows with how far above the "liked" line the rating sits.
-    vals = 1.0 + 2.0 * (df["rating"].to_numpy() - positive_threshold)
+    ratings = df["rating"].to_numpy().astype(np.float32)
+    if signal == "liked":
+        vals = 1.0 + 2.0 * (ratings - positive_threshold)
+    else:
+        # 0.5 stars -> WATCH_CONFIDENCE, 5 stars -> WATCH + LIKE.
+        scaled = np.clip((ratings - 0.5) / 4.5, 0.0, 1.0)
+        vals = WATCH_CONFIDENCE + LIKE_CONFIDENCE * scaled
+
     mat = sp.csr_matrix((vals.astype(np.float32), (rows, cols)), shape=(len(users), len(items)))
     return mat, users, items
 
@@ -82,6 +108,7 @@ def fit(
     alpha: float = 12.0,
     seed: int = 0,
     holdout_users: np.ndarray | None = None,
+    signal: str = "watched",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Fit iALS. Returns (movielens_item_ids, item_factor_matrix).
 
@@ -92,6 +119,11 @@ def fit(
     """
     from implicit.als import AlternatingLeastSquares
 
+    # implicit parallelises ALS itself; letting OpenBLAS also spawn a
+    # threadpool inside each of those workers oversubscribes every core and
+    # is markedly slower than single-threaded BLAS here.
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
     df = load_ratings()
     console.print(f"[dim]MovieLens ratings: {df.height:,}[/dim]")
     if holdout_users is not None and len(holdout_users):
@@ -99,7 +131,7 @@ def fit(
         df = df.filter(~pl.col("userId").is_in(pl.Series(holdout_users.astype(np.int32))))
         console.print(f"[dim]held out {len(holdout_users):,} users "
                       f"({before - df.height:,} ratings) from CF training[/dim]")
-    mat, users, items = build_matrix(df)
+    mat, users, items = build_matrix(df, signal=signal)
     console.print(f"[dim]implicit matrix: {mat.shape[0]:,} users x {mat.shape[1]:,} items, "
                   f"{mat.nnz:,} nonzeros[/dim]")
 

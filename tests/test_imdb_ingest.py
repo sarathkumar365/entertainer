@@ -110,33 +110,41 @@ def mini_dumps(tmp_path: Path, monkeypatch):
     return root
 
 
-def test_build_filters_and_joins(mini_dumps):
-    df = imdb.build()
+def test_build_filters_out_shorts_adult_and_pre_1930(mini_dumps):
+    df = imdb.build(min_votes=100)
     ids = set(df["imdb_id"].to_list())
-    assert ids == {"tt01", "tt02", "tt03", "tt08"}, "unexpected survivors"
+    # tt04 adult, tt05 pre-1930, tt06 a short, tt07 below the flat floor.
+    assert ids == {"tt01", "tt02", "tt03", "tt08"}, ids
 
 
-def test_language_uses_the_original_title_row(mini_dumps):
-    df = imdb.build()
-    langs = dict(zip(df["imdb_id"].to_list(), df["language"].to_list(), strict=True))
-    # Two Tamil akas rows outnumber the single Malayalam one, but the
-    # Malayalam row is the original title and must win.
-    assert langs["tt01"] == "ml"
-    assert langs["tt08"] == "kn"
-    # No language tag anywhere, so the region stands in.
-    assert langs["tt02"] == "en"
+def test_build_does_not_guess_a_language(mini_dumps):
+    """akas tags describe localised releases, not the production language.
+
+    tt01 is a Malayalam film whose akas rows are mostly Tamil dubs and a US
+    release. Any attempt to infer a language from that is wrong, so the build
+    declines to try and leaves it for TMDB.
+    """
+    df = imdb.build(min_votes=100)
+    assert set(df["language"].to_list()) == {"xx"}
 
 
-def test_small_industry_floor_keeps_a_150_vote_kannada_film(mini_dumps):
-    df = imdb.build()
-    row = df.filter(df["imdb_id"] == "tt08")
-    assert row.height == 1
-    assert row["imdb_votes"][0] == 150
+def test_low_vote_titles_survive_the_flat_floor_for_later_pruning(mini_dumps):
+    df = imdb.build(min_votes=50)
+    ids = set(df["imdb_id"].to_list())
+    # The 150-vote Kannada film must reach the enrichment stage; whether it
+    # survives is decided afterwards, by its real language's floor.
+    assert "tt08" in ids
     assert config.VOTE_FLOOR_BY_LANGUAGE["kn"] <= 150 < config.VOTE_FLOOR_DEFAULT
 
 
+def test_release_regions_are_collected(mini_dumps):
+    df = imdb.build(min_votes=100)
+    row = df.filter(df["imdb_id"] == "tt02").to_dicts()[0]
+    assert set(row["countries"]) == {"US", "FR"}
+
+
 def test_crew_and_cast_resolve_to_names(mini_dumps):
-    df = imdb.build()
+    df = imdb.build(min_votes=100)
     row = df.filter(df["imdb_id"] == "tt01").to_dicts()[0]
     assert "Madhu C. Narayanan" in row["directors"]
     assert "Shyam Pushkaran" in row["writers"]
@@ -146,7 +154,7 @@ def test_crew_and_cast_resolve_to_names(mini_dumps):
 
 
 def test_series_are_tagged_as_tv(mini_dumps):
-    df = imdb.build()
+    df = imdb.build(min_votes=100)
     kinds = dict(zip(df["imdb_id"].to_list(), df["kind"].to_list(), strict=True))
     assert kinds["tt03"] == "tv"
     assert kinds["tt02"] == "movie"
@@ -155,9 +163,9 @@ def test_series_are_tagged_as_tv(mini_dumps):
 def test_degrades_when_optional_dumps_are_absent(mini_dumps):
     (mini_dumps / "title.akas.tsv.gz").unlink()
     (mini_dumps / "title.principals.tsv.gz").unlink()
-    df = imdb.build()
-    assert df.height >= 1
-    # Without akas every language is unknown, so the default floor applies
-    # and only the heavily-voted titles survive.
-    assert set(df["language"].to_list()) == {"xx"}
-    assert set(df["imdb_id"].to_list()) == {"tt01", "tt02", "tt03"}
+    df = imdb.build(min_votes=100)
+    assert set(df["imdb_id"].to_list()) == {"tt01", "tt02", "tt03", "tt08"}
+    assert all(not c for c in df["countries"].to_list())
+    assert all(not c for c in df["cast_names"].to_list())
+    # Crew is still present: it comes from a different dump.
+    assert any(d for d in df["directors"].to_list())

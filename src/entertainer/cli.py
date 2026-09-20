@@ -90,9 +90,10 @@ def _record(query: str, verdict: str, kind: str | None = None) -> None:
 def setup(
     skip_enrich: bool = typer.Option(False, help="Skip the TMDB enrichment pass."),
     enrich_limit: int = typer.Option(0, help="Enrich only the N most-voted titles (0 = all)."),
-    vote_floor_scale: float = typer.Option(1.0, help="<1 widens the catalogue, >1 narrows it."),
+    min_votes: int = typer.Option(50, help="Flat IMDb vote floor at build time."),
+    floor_scale: float = typer.Option(1.0, help="<1 widens the catalogue, >1 narrows it."),
 ) -> None:
-    """Run the entire pipeline: download, build, enrich, embed, factorise, fuse."""
+    """Run the entire pipeline: download, build, enrich, prune, embed, factorise, fuse."""
     from .data import catalog, download
 
     PATHS.ensure()
@@ -100,22 +101,24 @@ def setup(
     download.fetch_imdb()
     download.fetch_movielens()
 
-    console.rule("[bold]2/6 building catalogue")
-    n = catalog.build_base(vote_floor_scale=vote_floor_scale)
+    console.rule("[bold]2/7 building catalogue")
+    n = catalog.build_base(min_votes=min_votes)
     console.print(f"[green]{n:,} titles[/green]")
 
     if not skip_enrich and has_tmdb():
-        console.rule("[bold]3/6 enriching from TMDB")
+        console.rule("[bold]3/7 enriching from TMDB")
         data_enrich(limit=enrich_limit or None, keywords=False)
         data_keywords()
     else:
-        console.rule("[bold]3/6 TMDB enrichment skipped")
+        console.rule("[bold]3/7 TMDB enrichment skipped")
 
-    console.rule("[bold]4/6 encoding item text")
+    console.rule("[bold]4/7 pruning by language")
+    data_prune(scale=floor_scale)
+    console.rule("[bold]5/7 encoding item text")
     data_embed()
-    console.rule("[bold]5/6 factorising MovieLens")
+    console.rule("[bold]6/7 factorising MovieLens")
     data_cf()
-    console.rule("[bold]6/6 fusing item space")
+    console.rule("[bold]7/7 fusing item space")
     data_fuse()
 
     console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
@@ -131,12 +134,30 @@ def data_fetch() -> None:
     console.print("[green]downloaded[/green]")
 
 
+@data_app.command("prune")
+def data_prune(
+    scale: float = typer.Option(1.0, help="<1 keeps more obscure titles, >1 fewer."),
+    dry_run: bool = typer.Option(False, help="Report what would go, change nothing."),
+) -> None:
+    """Apply per-language vote floors, after TMDB has supplied the languages."""
+    from .data import catalog
+
+    before, after = catalog.prune_by_language(scale=scale, dry_run=dry_run)
+    verb = "would remove" if dry_run else "removed"
+    console.print(f"[green]{before:,} -> {after:,}[/green] ({verb} {before - after:,})")
+    if not dry_run:
+        table = Table("language", "titles")
+        for lang, count in catalog.language_histogram(25):
+            table.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{count:,}")
+        console.print(table)
+
+
 @data_app.command("build")
-def data_build(vote_floor_scale: float = typer.Option(1.0)) -> None:
+def data_build(min_votes: int = typer.Option(50, help="Flat IMDb vote floor at build time.")) -> None:
     """Build the catalogue table from the bulk datasets."""
     from .data import catalog
 
-    n = catalog.build_base(vote_floor_scale=vote_floor_scale)
+    n = catalog.build_base(min_votes=min_votes)
     console.print(f"[green]{n:,} titles[/green]")
     table = Table("language", "titles")
     for lang, count in catalog.language_histogram(20):
@@ -253,6 +274,9 @@ def data_cf(
     holdout: int = typer.Option(
         2000, help="MovieLens users withheld from training, reserved for offline evaluation."
     ),
+    signal: str = typer.Option(
+        "watched", help="watched (all ratings, graded confidence) | liked (>=3.5 only)."
+    ),
 ) -> None:
     """Factorise the MovieLens co-consumption matrix."""
     import numpy as np
@@ -264,7 +288,9 @@ def data_cf(
     rng = np.random.default_rng(0)
     held = rng.choice(users, size=min(holdout, len(users)), replace=False) if holdout else None
 
-    ids, item_factors = cf.fit(factors=factors, iterations=iterations, holdout_users=held)
+    ids, item_factors = cf.fit(
+        factors=factors, iterations=iterations, holdout_users=held, signal=signal
+    )
     cf.save(ids, item_factors)
     if held is not None:
         np.save(PATHS.artifacts / "cf_holdout_users.npy", held.astype(np.int32))
