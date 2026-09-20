@@ -208,7 +208,10 @@ population knowledge). Reported with NDCG/precision/MAP/MRR **and** novelty,
 diversity and serendipity, so an accuracy gain bought by collapsing onto the
 canon is visible rather than hidden. Significance by paired bootstrap.
 
-See [`docs/RESULTS.md`](docs/RESULTS.md).
+The protocol is fixed in advance and written down in
+[`docs/RESULTS.md`](docs/RESULTS.md), along with the results — deciding what
+counts as success after seeing the numbers is how offline recommender
+evaluation usually goes wrong.
 
 ---
 
