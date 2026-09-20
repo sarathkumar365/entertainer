@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS events (
     event_id   BIGINT PRIMARY KEY,
     ts         TIMESTAMP,
     item_id    INTEGER,
-    kind       VARCHAR,   -- rate | skip | seen | watchlist | dismiss
+    kind       VARCHAR,   -- rate | skip | seen | unseen | watchlist | dismiss
     value      DOUBLE,    -- rating on 0..10 for 'rate', else NULL
     source     VARCHAR,   -- elicit | rec | manual | import
     context    VARCHAR    -- JSON blob: slate position, policy version, ...
@@ -177,12 +177,37 @@ def negatives(con: duckdb.DuckDBPyConnection) -> list[int]:
     ]
 
 
+# Answering "haven't seen it" is emphatically not a reason to stop
+# recommending something — it is the single best reason to keep it in play.
+# So `unseen` is recorded (to avoid asking twice) but deliberately excluded
+# from the set below.
+CONSUMED_KINDS = ("rate", "skip", "seen", "dismiss")
+
+
 def interacted(con: duckdb.DuckDBPyConnection) -> set[int]:
-    """Anything already shown-and-acted-on; never recommend these again."""
+    """Anything already watched or judged; never recommend these again."""
+    placeholders = ", ".join(f"'{k}'" for k in CONSUMED_KINDS)
     return {
         r[0]
         for r in con.execute(
-            "SELECT DISTINCT item_id FROM events WHERE kind IN ('rate','skip','seen','dismiss')"
+            f"SELECT DISTINCT item_id FROM events WHERE kind IN ({placeholders})"
+        ).fetchall()
+    }
+
+
+def already_asked(con: duckdb.DuckDBPyConnection) -> set[int]:
+    """Everything ever put in front of the user, including titles they had not seen.
+
+    Used by the cold-start loop so the same question is not asked twice, and
+    kept separate from `interacted` precisely because the two must not be
+    conflated: one governs what to stop recommending, the other what to stop
+    asking about.
+    """
+    return {
+        r[0]
+        for r in con.execute(
+            "SELECT DISTINCT item_id FROM events WHERE kind IN "
+            "('rate', 'skip', 'seen', 'dismiss', 'unseen')"
         ).fetchall()
     }
 

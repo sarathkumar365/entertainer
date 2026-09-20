@@ -540,7 +540,7 @@ def onboard(
         if pool.size == 0:
             _fail("no recognisable titles for those languages")
 
-        asked = store.interacted(con)
+        asked = store.already_asked(con)
         answered: list[tuple[int, float]] = []
         console.print(
             Panel.fit(
@@ -602,7 +602,9 @@ def onboard(
             if key == "q":
                 break
             if key not in keymap:
-                store.log_event(con, item, "seen", None, "elicit", {"answer": "unseen"})
+                # Not a verdict: record that the question was asked so it is
+                # not repeated, without removing the title from circulation.
+                store.log_event(con, item, "unseen", None, "elicit", {"answer": "unseen"})
                 continue
             reward = engine.record(con, item, keymap[key], source="elicit")
             answered.append((item, reward))

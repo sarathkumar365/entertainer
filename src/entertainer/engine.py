@@ -30,6 +30,11 @@ from .models.taste import fit as fit_taste
 # enough that a decisive shift in taste is reflected within a season or two.
 HALF_LIFE_DAYS = 1100.0
 
+# A skip says "not tonight", not "I disliked this", so it enters as a mild
+# negative at half the weight of a stated verdict.
+SKIP_REWARD = 0.25
+SKIP_WEIGHT = 0.5
+
 # Columns needed for filtering, scoring and axis naming. The synopsis is
 # deliberately excluded: it is only needed for the handful of titles actually
 # displayed, and loading 300k of them costs hundreds of megabytes for nothing.
@@ -71,8 +76,8 @@ class Engine:
 
     # --- labels ------------------------------------------------------------
 
-    def labels(self, con) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return (item_ids, rewards, ages_in_days) from the event log.
+    def labels(self, con) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return (item_ids, rewards, ages_in_days, is_weak) from the event log.
 
         Latest verdict per title wins, so changing your mind about something
         simply overwrites the old opinion rather than averaging with it.
@@ -87,34 +92,39 @@ class Engine:
             ) WHERE rn = 1
             """
         ).fetchall()
-        ids, rewards, ages = [], [], []
+        ids, rewards, ages, weak = [], [], [], []
         for item_id, value, age in rows:
             if int(item_id) in fs.index:
                 ids.append(int(item_id))
                 rewards.append(float(value) / 10.0)
                 ages.append(float(age or 0))
+                weak.append(False)
         # Explicit skips are weak negatives: the user declined to engage, which
-        # is informative but far less so than saying they disliked it.
+        # is informative but far less so than saying they disliked it. They are
+        # flagged rather than identified later by their reward value, since a
+        # stated verdict could coincide with that value.
         for item_id in store.negatives(con):
             if int(item_id) in fs.index:
                 ids.append(int(item_id))
-                rewards.append(0.25)
+                rewards.append(SKIP_REWARD)
                 ages.append(0.0)
+                weak.append(True)
         return (
             np.array(ids, dtype=np.int64),
             np.array(rewards, dtype=np.float64),
             np.array(ages, dtype=np.float64),
+            np.array(weak, dtype=bool),
         )
 
     def fit(self, con, save: bool = True, half_life_days: float = HALF_LIFE_DAYS) -> TasteModel | None:
-        ids, rewards, ages = self.labels(con)
+        ids, rewards, ages, weak = self.labels(con)
         if ids.size < 3:
             return None
         fs = self.features(con)
         X = fs.vectors_for(ids)
 
         # Skips carry half the weight of a stated verdict.
-        weights = np.where(np.isclose(rewards, 0.25), 0.5, 1.0)
+        weights = np.where(weak, SKIP_WEIGHT, 1.0)
         # Taste drifts. Old verdicts still count, but a film you loved four
         # years ago is weaker evidence about what you want tonight than one
         # you loved last month. The half-life is deliberately long: this is a
@@ -157,7 +167,7 @@ class Engine:
 
 def liked_titles(con, engine: Engine, min_reward: float = 0.7, limit: int = 60):
     """The user's own positives, for use in explanations."""
-    ids, rewards, _ = engine.labels(con)
+    ids, rewards, _, _ = engine.labels(con)
     if ids.size == 0:
         return [], []
     order = np.argsort(-rewards)

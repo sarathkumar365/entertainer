@@ -408,3 +408,42 @@ def test_onboard_can_be_pointed_at_specific_languages(app_env):
         if line.startswith("│") and "lang" not in line
     }
     assert languages - {""} <= {"ml", "ta"}, languages
+
+
+def test_titles_answered_unseen_stay_recommendable(app_env):
+    """"Haven't seen it" is the best reason to keep recommending something."""
+    cli, runner = app_env
+    from entertainer import store
+
+    run(cli, runner, "onboard", "--n", "3", stdin="n\nn\nn\nl\ni\nl\n")
+    with store.session(read_only=True) as con:
+        unseen = {
+            r[0]
+            for r in con.execute("SELECT item_id FROM events WHERE kind = 'unseen'").fetchall()
+        }
+        assert unseen, "the loop should have recorded the skipped questions"
+        assert not (unseen & store.interacted(con)), "unseen must not count as consumed"
+        assert unseen <= store.already_asked(con), "but must count as already asked"
+
+
+def test_marking_something_seen_does_remove_it(app_env):
+    cli, runner = app_env
+    from entertainer import store
+
+    assert run(cli, runner, "seen", "Whiplash").exit_code == 0
+    with store.session(read_only=True) as con:
+        row = con.execute("SELECT item_id FROM titles WHERE title = 'Whiplash'").fetchone()
+        assert int(row[0]) in store.interacted(con)
+
+
+def test_onboard_does_not_repeat_a_question(app_env):
+    cli, runner = app_env
+    from entertainer import store
+
+    run(cli, runner, "onboard", "--n", "4", stdin="l\nn\ni\nn\nl\nd\n")
+    run(cli, runner, "onboard", "--n", "4", stdin="l\ni\nl\ni\n")
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            "SELECT item_id, count(*) c FROM events GROUP BY 1 HAVING c > 1"
+        ).fetchall()
+    assert not rows, f"asked about the same title twice: {rows}"
