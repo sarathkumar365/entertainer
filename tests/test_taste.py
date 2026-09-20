@@ -1,0 +1,91 @@
+import numpy as np
+import pytest
+
+from entertainer.models.taste import (
+    FeatureMap,
+    fit,
+    taste_direction,
+    verdict_to_reward,
+)
+
+
+def _synthetic(n=200, d=32, seed=0):
+    rng = np.random.default_rng(seed)
+    w = rng.normal(size=d)
+    w /= np.linalg.norm(w)
+    X = rng.normal(size=(n, d))
+    X /= np.linalg.norm(X, axis=1, keepdims=True)
+    y = 1.0 / (1.0 + np.exp(-4.0 * (X @ w)))
+    return X, np.clip(y + rng.normal(0, 0.05, n), 0, 1), w
+
+
+def test_verdict_mapping_is_monotone():
+    order = ["hate", "dislike", "meh", "like", "love"]
+    values = [verdict_to_reward(v) for v in order]
+    assert values == sorted(values)
+    assert verdict_to_reward(8) == pytest.approx(0.8)
+    assert verdict_to_reward(0.25) == pytest.approx(0.25)
+    with pytest.raises(ValueError):
+        verdict_to_reward("brilliant")
+
+
+def test_feature_map_shapes():
+    fm = FeatureMap(dim=8, n_rff=16, gamma=0.5, seed=1)
+    out = fm(np.zeros((5, 8), dtype=np.float32))
+    assert out.shape == (5, fm.out_dim) == (5, 8 + 16 + 1)
+    assert np.allclose(out[:, 0], 1.0), "intercept column must be present"
+
+
+def test_posterior_improves_with_data():
+    X, y, w = _synthetic(n=400)
+    Xt, yt, _ = _synthetic(n=500, seed=99)
+    # Same latent direction for train and test.
+    Xt = Xt / np.linalg.norm(Xt, axis=1, keepdims=True)
+    yt = 1.0 / (1.0 + np.exp(-4.0 * (Xt @ w)))
+
+    corrs = []
+    for n in (10, 50, 300):
+        model = fit(X[:n], y[:n])
+        pred = model.predict(Xt, with_std=False)
+        corrs.append(np.corrcoef(pred, yt)[0, 1])
+    assert corrs[0] < corrs[1] < corrs[2]
+    assert corrs[-1] > 0.85
+
+
+def test_uncertainty_shrinks_with_data():
+    X, y, _ = _synthetic(n=400)
+    _, sd_small = fit(X[:10], y[:10]).predict(X[300:])
+    _, sd_large = fit(X[:300], y[:300]).predict(X[300:])
+    assert sd_large.mean() < sd_small.mean()
+
+
+def test_thompson_draws_are_coherent_and_varied():
+    X, y, _ = _synthetic(n=60)
+    model = fit(X, y)
+    a = model.thompson_scores(X, np.random.default_rng(1))
+    b = model.thompson_scores(X, np.random.default_rng(2))
+    assert not np.allclose(a, b), "draws must differ, otherwise there is no exploration"
+    # A single shared weight draw keeps the ranking broadly coherent.
+    assert np.corrcoef(a, b)[0, 1] > 0.4
+
+
+def test_capacity_selection_is_conservative_when_data_is_tiny():
+    X, y, _ = _synthetic(n=30)
+    assert fit(X, y).feature_map.n_rff == 0
+
+
+def test_taste_direction_has_latent_dimension():
+    X, y, _ = _synthetic(n=80, d=16)
+    model = fit(X, y)
+    assert taste_direction(model).shape == (16,)
+
+
+def test_roundtrip_persistence(tmp_path):
+    from entertainer.models.taste import TasteModel
+
+    X, y, _ = _synthetic(n=150)
+    model = fit(X, y)
+    path = model.to_npz(tmp_path / "taste.npz")
+    restored = TasteModel.from_npz(path)
+    assert np.allclose(model.predict(X, with_std=False), restored.predict(X, with_std=False))
+    assert restored.n_obs == model.n_obs

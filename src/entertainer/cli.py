@@ -105,7 +105,8 @@ def setup(
 
     if not skip_enrich and has_tmdb():
         console.rule("[bold]3/6 enriching from TMDB")
-        data_enrich(limit=enrich_limit or None)
+        data_enrich(limit=enrich_limit or None, keywords=False)
+        data_keywords()
     else:
         console.rule("[bold]3/6 TMDB enrichment skipped")
 
@@ -171,6 +172,46 @@ def data_enrich(
     finally:
         con.close()
     console.print(f"[green]enriched {written['n']:,} titles[/green]")
+
+
+@data_app.command("keywords")
+def data_keywords(
+    top: int = typer.Option(120_000, help="Backfill the N most-voted titles that still lack keywords."),
+    concurrency: int = typer.Option(40),
+) -> None:
+    """Backfill TMDB keywords for the titles most likely to be encountered."""
+    from .data import tmdb
+
+    if not has_tmdb():
+        _fail("no TMDB credentials")
+    con = store.connect()
+    targets = con.execute(
+        """
+        SELECT item_id, tmdb_id, kind FROM titles
+        WHERE tmdb_id IS NOT NULL AND (keywords IS NULL OR len(keywords) = 0)
+        ORDER BY imdb_votes DESC NULLS LAST LIMIT ?
+        """,
+        [top],
+    ).fetchall()
+    if not targets:
+        console.print("[green]nothing to backfill[/green]")
+        con.close()
+        return
+    console.print(f"[dim]{len(targets):,} titles need keywords[/dim]")
+
+    written = {"n": 0}
+
+    def flush(batch):
+        con.executemany("UPDATE titles SET keywords = ? WHERE item_id = ?",
+                        [(kws, item_id) for item_id, kws in batch])
+        written["n"] += len(batch)
+
+    try:
+        tmdb.backfill_keywords([(int(a), int(b), c) for a, b, c in targets],
+                               concurrency=concurrency, on_batch=flush)
+    finally:
+        con.close()
+    console.print(f"[green]keywords for {written['n']:,} titles[/green]")
 
 
 @data_app.command("embed")
