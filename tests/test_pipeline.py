@@ -346,3 +346,54 @@ def test_feature_space_survives_entirely_missing_metadata():
     fs = build_features(ids, latent, meta)
     assert np.isfinite(fs.matrix).all()
     assert np.allclose(fs.side[:, 0], 0.0)
+
+
+def test_shortlisted_variance_matches_the_exact_computation(world):
+    """The fast path must agree with the slow one it replaced."""
+    from entertainer.recommend import _predictive_std
+
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(6)
+    train = rng.choice(N_ITEMS, size=200, replace=False)   # enough to trigger RFF
+    model = fit(fs.vectors_for(train), reward[train])
+
+    rows = rng.choice(N_ITEMS, size=40, replace=False)
+    phi = model.feature_map(fs.matrix[rows])
+    fast = _predictive_std(model, phi)
+    _, exact = model.predict(fs.matrix[rows])
+    assert np.allclose(fast, exact, rtol=1e-5, atol=1e-8)
+
+
+def test_ucb_respects_the_explore_setting(world):
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(6)
+    train = rng.choice(N_ITEMS, size=25, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+
+    def slate(kappa):
+        return [
+            p.item_id
+            for p in recommend(
+                model, fs, meta, k=10, strategy="ucb", explore=kappa,
+                rng=np.random.default_rng(0),
+            )
+        ]
+
+    greedy = slate(0.0)
+    optimistic = slate(3.0)
+    assert greedy != optimistic
+    # Zero kappa must reproduce the pure posterior-mean ranking.
+    assert greedy == [p.item_id for p in recommend(
+        model, fs, meta, k=10, strategy="mean", rng=np.random.default_rng(0)
+    )]
+
+
+def test_every_recommendation_carries_a_finite_uncertainty(world):
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(8)
+    train = rng.choice(N_ITEMS, size=40, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+    picks = recommend(model, fs, meta, k=12, rng=np.random.default_rng(2))
+    assert picks
+    assert all(np.isfinite(p.std) and p.std > 0 for p in picks)
+    assert all(0.0 < p.propensity <= 1.0 for p in picks)

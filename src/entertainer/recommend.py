@@ -75,6 +75,19 @@ class Recommendation:
     reasons: list[tuple[str, float]] = field(default_factory=list)
 
 
+def _predictive_std(model: TasteModel, phi: np.ndarray) -> np.ndarray:
+    """Predictive standard deviation for pre-mapped rows.
+
+    Epistemic (parameter) variance plus aleatoric (noise) variance, computed
+    through a Cholesky factor so the quadratic form is a single triangular
+    solve rather than an explicit f x f sandwich per row.
+    """
+    chol = np.linalg.cholesky(model.cov + 1e-10 * np.eye(model.cov.shape[0]))
+    projected = phi @ chol
+    var = np.einsum("ij,ij->i", projected, projected) + 1.0 / model.beta
+    return np.sqrt(np.maximum(var, 1e-12))
+
+
 def _mmr(
     order: np.ndarray,
     scores: np.ndarray,
@@ -156,14 +169,23 @@ def recommend(
         return []
 
     X = fs.matrix[idx]
-    mean, std = model.predict(X)
+    phi = model.feature_map(X)
+
+    # Posterior mean is a single matrix-vector product, so it is affordable
+    # across the whole catalogue. Predictive *variance* is a quadratic form
+    # and costs f times as much — at 270k candidates and a lifted feature map
+    # that is the difference between a recommendation appearing instantly and
+    # taking fifteen seconds. It is therefore computed only for the shortlist,
+    # which is the only place it changes any decision.
+    mean_all = phi @ model.mean + model.y_mean
 
     if strategy == "mean":
-        scores = mean
+        scores = mean_all
     elif strategy == "ucb":
-        scores = model.ucb_scores(X, kappa=max(explore, 0.0))
+        scores = mean_all  # provisional; corrected on the shortlist below
     else:
-        scores = model.thompson_scores(X, rng, temperature=max(explore, 0.0))
+        w = model.sample_weights(rng, 1, temperature=max(explore, 0.0))[0]
+        scores = phi @ w + model.y_mean
 
     if novelty > 0.0:
         # Push away from the canon. Scored on log votes rather than a hard
@@ -177,23 +199,41 @@ def recommend(
         exposure = (exposure - exposure.mean()) / (exposure.std() + 1e-9)
         scores = scores - novelty * float(np.std(scores)) * exposure
 
-    top = np.argsort(-scores)[: min(shortlist, idx.size)]
+    # Shortlist generously, then refine. The union with the top of the mean
+    # ranking guarantees the greedy picks are always present, which is what
+    # the explore/exploit marker is measured against.
+    pool_size = min(max(shortlist, k * 20), idx.size)
+    top = np.argsort(-scores)[:pool_size]
+    top = np.union1d(top, np.argsort(-mean_all)[: max(k * 4, 64)])
+
+    std_top = _predictive_std(model, phi[top])
+    if strategy == "ucb":
+        adjusted = mean_all[top] + max(explore, 0.0) * std_top
+        reorder = np.argsort(-adjusted)
+        top = top[reorder]
+        std_top = std_top[reorder]
+        scores = scores.copy()
+        scores[top] = adjusted[reorder]
+
+    std_by_row = dict(zip(top.tolist(), std_top.tolist(), strict=True))
+    order = top[np.argsort(-scores[top])]
+
     latent = fs.latent[idx]
-    diversified = _mmr(top, scores, latent, k=k * 3, lambda_=mmr_lambda)
+    diversified = _mmr(order, scores, latent, k=k * 3, lambda_=mmr_lambda)
     final_rows = _language_quota(diversified, fs.item_ids[idx], meta, k, max_language_share)
 
     # First-order propensity under a softmax over the shortlist. The slate is
     # drawn without replacement, so this understates later positions; it is
     # recorded as an approximation and used only for relative weighting.
-    temp = max(float(np.std(scores[top])), 1e-3)
-    logits = (scores[top] - scores[top].max()) / temp
+    temp = max(float(np.std(scores[order])), 1e-3)
+    logits = (scores[order] - scores[order].max()) / temp
     probs = np.exp(logits)
     probs /= probs.sum()
-    prop_by_row = dict(zip(top.tolist(), probs.tolist(), strict=True))
+    prop_by_row = dict(zip(order.tolist(), probs.tolist(), strict=True))
 
     # "Explored" = the model's own point estimate did not rank it top-k, so it
     # is here because of posterior uncertainty rather than confidence.
-    exploit_rows = set(np.argsort(-mean)[:k].tolist())
+    exploit_rows = set(np.argsort(-mean_all)[:k].tolist())
 
     out: list[Recommendation] = []
     for pos, row in enumerate(final_rows):
@@ -201,8 +241,8 @@ def recommend(
             Recommendation(
                 item_id=int(fs.item_ids[idx[row]]),
                 score=float(scores[row]),
-                mean=float(mean[row]),
-                std=float(std[row]),
+                mean=float(mean_all[row]),
+                std=float(std_by_row.get(row, float("nan"))),
                 propensity=float(prop_by_row.get(row, 1.0 / max(idx.size, 1))),
                 explored=row not in exploit_rows,
                 position=pos,
