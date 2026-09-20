@@ -152,7 +152,9 @@ def _run_elicitation(
         else:
             ids = np.array([a[0] for a in answered])
             rewards = np.array([a[1] for a in answered])
-            model = fit_taste(fs.vectors_for(ids), rewards, allow_rff=False)
+            model = fit_taste(
+                fs.vectors_for(ids), rewards, allow_rff=False, prior=_ACTIVE_PRIOR
+            )
             batch = elicit.next_questions(
                 model, fs, meta, asked, k=cfg.seed_questions, pool=pool,
                 criterion=cfg.criterion, rng=rng,
@@ -237,15 +239,33 @@ def arm_ridge(fs, meta, candidate_rows, answered, k):
     return _rank(m.predict(fs.matrix[candidate_rows]), candidate_rows, fs, k)
 
 
-def arm_taste(fs, meta, candidate_rows, answered, k):
-    """The engine: evidence-tuned Bayesian posterior, ranked by posterior mean."""
+def _taste_arm(fs, meta, candidate_rows, answered, k, prior):
     if len(answered) < 3:
         return arm_quality(fs, meta, candidate_rows, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
-    model = fit_taste(fs.vectors_for(ids), rewards)
+    model = fit_taste(fs.vectors_for(ids), rewards, prior=prior)
     mean = model.predict(fs.matrix[candidate_rows], with_std=False)
     return _rank(mean, candidate_rows, fs, k)
+
+
+def arm_taste_flat(fs, meta, candidate_rows, answered, k):
+    """The engine with an isotropic prior: no population knowledge at all."""
+    return _taste_arm(fs, meta, candidate_rows, answered, k, prior=None)
+
+
+def arm_taste(fs, meta, candidate_rows, answered, k):
+    """The engine: evidence-tuned Bayesian posterior over a population prior.
+
+    The prior is injected by ``run`` rather than loaded here, so that the
+    replay can guarantee it was fitted without the simulated user's own
+    opinions in it.
+    """
+    return _taste_arm(fs, meta, candidate_rows, answered, k, prior=_ACTIVE_PRIOR)
+
+
+# Set by ``run``; module-level so the arm signature stays uniform.
+_ACTIVE_PRIOR = None
 
 
 ARMS = {
@@ -254,6 +274,7 @@ ARMS = {
     "content-centroid": arm_content_centroid,
     "weighted-kNN": arm_weighted_knn,
     "ridge": arm_ridge,
+    "entertainer-flat-prior": arm_taste_flat,
     "entertainer": arm_taste,
 }
 
@@ -265,8 +286,11 @@ def run(
     cfg: SimConfig,
     arms: Sequence[str] = tuple(ARMS),
     elicitation: str = "v-optimal",
+    prior=None,
 ) -> dict[str, ArmResult]:
     """``elicitation``: v-optimal | d-optimal | random."""
+    global _ACTIVE_PRIOR
+    _ACTIVE_PRIOR = prior
     if elicitation in ("v-optimal", "d-optimal"):
         cfg = SimConfig(**{**cfg.__dict__, "criterion": elicitation})
     rng = np.random.default_rng(cfg.seed)

@@ -169,3 +169,91 @@ def test_degrades_when_optional_dumps_are_absent(mini_dumps):
     assert all(not c for c in df["cast_names"].to_list())
     # Crew is still present: it comes from a different dump.
     assert any(d for d in df["directors"].to_list())
+
+
+def test_rebuild_preserves_enrichment(mini_dumps, tmp_path, monkeypatch):
+    """A rebuild must never discard hundreds of thousands of network round trips.
+
+    Enrichment is by far the most expensive stage in the pipeline, and a
+    rebuild is routine — it is how MovieLens identities and cast credits get
+    picked up once those downloads finish. Carrying enrichment across is keyed
+    on the IMDb id rather than the internal item_id, because item ids are
+    positional within a build and are reassigned every time.
+    """
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "interim"
+        embeddings = tmp_path / "emb"
+        artifacts = tmp_path / "art"
+        reports = tmp_path / "rep"
+        catalog_db = tmp_path / "test.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+
+    assert catalog.build_base(min_votes=100) == 4
+
+    con = store.connect()
+    con.execute(
+        """
+        UPDATE titles SET language = 'ml', overview = 'Four brothers.',
+                          keywords = ['family'], tmdb_id = 12345, enriched_at = now()
+        WHERE imdb_id = 'tt01'
+        """
+    )
+    # Shift every item_id so a carry keyed on position would visibly fail.
+    con.execute("UPDATE titles SET item_id = item_id + 900")
+    con.close()
+
+    assert catalog.build_base(min_votes=100) == 4
+
+    con = store.connect(read_only=True)
+    row = con.execute(
+        "SELECT language, overview, keywords, tmdb_id, enriched_at FROM titles WHERE imdb_id = 'tt01'"
+    ).fetchone()
+    others = con.execute(
+        "SELECT count(*) FROM titles WHERE enriched_at IS NOT NULL"
+    ).fetchone()[0]
+    con.close()
+
+    assert row[0] == "ml", "TMDB language must survive the rebuild"
+    assert row[1] == "Four brothers."
+    assert list(row[2]) == ["family"]
+    assert row[3] == 12345
+    assert row[4] is not None
+    assert others == 1, "only the enriched row should be marked enriched"
+
+
+def test_rebuild_from_empty_carries_nothing_and_does_not_fail(mini_dumps, tmp_path, monkeypatch):
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "fresh.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    assert catalog.build_base(min_votes=100) == 4
+    assert catalog.build_base(min_votes=100) == 4

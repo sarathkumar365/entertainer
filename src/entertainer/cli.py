@@ -110,29 +110,31 @@ def setup(
     from .data import catalog, download
 
     PATHS.ensure()
-    console.rule("[bold]1/6 downloading source data")
+    console.rule("[bold]1/8 downloading source data")
     download.fetch_imdb()
     download.fetch_movielens()
 
-    console.rule("[bold]2/7 building catalogue")
+    console.rule("[bold]2/8 building catalogue")
     n = catalog.build_base(min_votes=min_votes)
     console.print(f"[green]{n:,} titles[/green]")
 
     if not skip_enrich and has_tmdb():
-        console.rule("[bold]3/7 enriching from TMDB")
+        console.rule("[bold]3/8 enriching from TMDB")
         data_enrich(limit=enrich_limit or None, keywords=False)
         data_keywords()
     else:
-        console.rule("[bold]3/7 TMDB enrichment skipped")
+        console.rule("[bold]3/8 TMDB enrichment skipped")
 
-    console.rule("[bold]4/7 pruning by language")
+    console.rule("[bold]4/8 pruning by language")
     data_prune(scale=floor_scale)
-    console.rule("[bold]5/7 encoding item text")
+    console.rule("[bold]5/8 encoding item text")
     data_embed()
-    console.rule("[bold]6/7 factorising MovieLens")
+    console.rule("[bold]6/8 factorising MovieLens")
     data_cf()
-    console.rule("[bold]7/7 fusing item space")
+    console.rule("[bold]7/8 fusing item space")
     data_fuse()
+    console.rule("[bold]8/8 learning the population prior")
+    data_prior()
 
     console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
 
@@ -308,6 +310,44 @@ def data_cf(
     if held is not None:
         np.save(PATHS.artifacts / "cf_holdout_users.npy", held.astype(np.int32))
     console.print(f"[green]CF factors: {item_factors.shape}[/green]")
+
+
+@data_app.command("prior")
+def data_prior(
+    max_users: int = typer.Option(20_000, help="MovieLens users to fit taste vectors for."),
+    shrinkage: float = typer.Option(0.15, help="Pull the covariance towards a scaled identity."),
+) -> None:
+    """Learn what human taste vectors look like, to use as the cold-start prior."""
+    import numpy as np
+
+    from .models import fusion
+    from .models.population import fit as fit_prior
+
+    if not fusion.exists():
+        _fail("no fused item space — run `ent data fuse` first")
+
+    engine = Engine()
+    with store.session(read_only=True) as con:
+        fs = engine.features(con)
+        ml = dict(
+            con.execute(
+                "SELECT movielens_id, item_id FROM titles WHERE movielens_id IS NOT NULL"
+            ).fetchall()
+        )
+    item_of_ml = {int(k): int(v) for k, v in ml.items() if int(v) in fs.index}
+    if not item_of_ml:
+        _fail("no MovieLens identities in the catalogue — rebuild after downloading ml-32m")
+
+    held_path = PATHS.artifacts / "cf_holdout_users.npy"
+    held = np.load(held_path) if held_path.exists() else None
+
+    prior = fit_prior(fs, item_of_ml, holdout_users=held, max_users=max_users,
+                      shrinkage=shrinkage)
+    prior.save()
+    console.print(
+        f"[green]population prior from {prior.n_users:,} users[/green] "
+        f"({prior.dim} dimensions)"
+    )
 
 
 @data_app.command("fuse")
@@ -565,7 +605,9 @@ def onboard(
                 if len(answered) >= 3:
                     ids = np.array([a[0] for a in answered])
                     rewards = np.array([a[1] for a in answered])
-                    model = fit_taste(fs.vectors_for(ids), rewards, allow_rff=False)
+                    model = fit_taste(
+                        fs.vectors_for(ids), rewards, allow_rff=False, prior=engine.prior(con)
+                    )
                     batch = elicit.next_questions(
                         model, fs, meta, asked, k=16, languages=langs, pool=pool
                     )
@@ -1079,7 +1121,19 @@ def evaluate(
         _fail("no usable MovieLens histories — is the catalogue too narrow?")
     console.print(f"[dim]{len(histories)} simulated users, budget {budget} answers[/dim]")
 
-    results = run(fs, meta, histories, cfg, elicitation=elicitation)
+    prior = engine.prior()
+    if prior is None:
+        console.print("[yellow]no population prior fitted — run `ent data prior`[/yellow]")
+    else:
+        held_path = PATHS.artifacts / "cf_holdout_users.npy"
+        if not held_path.exists():
+            console.print(
+                "[red]no record of which users were held out; the prior may contain "
+                "the very users being replayed. Refusing to report a number.[/red]"
+            )
+            raise typer.Exit(code=1)
+
+    results = run(fs, meta, histories, cfg, elicitation=elicitation, prior=prior)
 
     table = Table("arm", "NDCG@10", "P@10", "MAP@10", "MRR@10", "novelty", "diversity", "serend.")
     for name, res in results.items():
