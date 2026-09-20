@@ -138,7 +138,7 @@ def setup(
     min_votes: int = typer.Option(50, help="Flat IMDb vote floor at build time."),
     floor_scale: float = typer.Option(1.0, help="<1 widens the catalogue, >1 narrows it."),
 ) -> None:
-    """Run the entire pipeline: download, build, enrich, prune, embed, factorise, fuse."""
+    """Run everything: download, build, enrich, prune, embed, factorise, fuse, prior."""
     from .data import catalog, download
 
     PATHS.ensure()
