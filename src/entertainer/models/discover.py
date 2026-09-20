@@ -106,6 +106,26 @@ def _log_odds(
     return [t for _, t in scored[:top]]
 
 
+def _background_counts(
+    rows: dict[int, dict], sample: int = 40_000, seed: int = 0
+) -> Counter:
+    """How common each descriptive term is in the catalogue at large.
+
+    Sampled rather than exhaustive. The log-odds prior only needs each term's
+    relative frequency, which forty thousand titles estimate perfectly well,
+    and counting all of them costs seconds on every invocation of a command
+    that should feel instant.
+    """
+    keys = list(rows)
+    if len(keys) > sample:
+        rng = np.random.default_rng(seed)
+        keys = [keys[i] for i in rng.choice(len(keys), size=sample, replace=False)]
+    background = Counter()
+    for key in keys:
+        background.update(_terms_for(rows[key]))
+    return background
+
+
 def describe_axes(
     model: TasteModel,
     item_ids: np.ndarray,
@@ -114,6 +134,7 @@ def describe_axes(
     n_axes: int = 6,
     pole_size: int = 400,
     example_count: int = 4,
+    background: Counter | None = None,
 ) -> list[Axis]:
     """Name the latent axes this person's preferences actually rest on."""
     w = taste_direction(model)
@@ -128,9 +149,7 @@ def describe_axes(
     strength = np.abs(w) * spread
     order = np.argsort(-strength)[:n_axes]
 
-    background = Counter()
-    for r in rows.values():
-        background.update(_terms_for(r))
+    background = background if background is not None else _background_counts(rows)
 
     axes: list[Axis] = []
     for idx in order:

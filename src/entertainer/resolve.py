@@ -173,8 +173,15 @@ def search(
         if top[0].score >= 0.80:
             return top[:limit]
 
-    # Tier 3: fuzzy. Restricted to a candidate pool by shared first token,
-    # because Jaro-Winkler over 300k rows per keystroke is not free.
+    # Tier 3: fuzzy. Skipped for short numeric queries: films called "96",
+    # "1917" and "12" all exist, and character-level similarity between short
+    # digit strings is noise — it would resolve "99" to "96" and record a
+    # verdict against a film the user never mentioned.
+    if norm.isdigit() and len(norm) <= 4:
+        return sorted(matches, key=lambda m: -m.score)[:limit]
+
+    # Restricted to a candidate pool by shared first token, because
+    # Jaro-Winkler over 300k rows per keystroke is not free.
     first = norm.split(" ")[0][:4]
     rows = con.execute(
         f"""{_SELECT}

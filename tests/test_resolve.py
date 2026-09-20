@@ -75,3 +75,23 @@ def test_kind_filter(con):
 def test_unknown_title_returns_nothing(con):
     match, alternatives = resolve_one(con, "zzzzqqqq nonexistent")
     assert match is None and not alternatives
+
+
+def test_short_numeric_queries_do_not_fuzzy_match(con):
+    """Films called "96", "1917" and "12" all exist; digit similarity is noise."""
+    con.execute(
+        "INSERT INTO titles (item_id, imdb_id, title, original_title, year, language, "
+        "imdb_votes, kind) VALUES (7, 'tt0000007', '96', '96', 2018, 'ta', 40000, 'movie')"
+    )
+    assert search(con, "96")[0].item_id == 7
+    assert not search(con, "99")
+    assert not search(con, "1917")
+
+
+def test_longer_numeric_titles_still_match_exactly(con):
+    con.execute(
+        "INSERT INTO titles (item_id, imdb_id, title, original_title, year, language, "
+        "imdb_votes, kind) VALUES (8, 'tt0000008', '1917', '1917', 2019, 'en', 600000, 'movie')"
+    )
+    match, _ = resolve_one(con, "1917")
+    assert match is not None and match.item_id == 8

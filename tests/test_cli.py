@@ -447,3 +447,45 @@ def test_onboard_does_not_repeat_a_question(app_env):
             "SELECT item_id, count(*) c FROM events GROUP BY 1 HAVING c > 1"
         ).fetchall()
     assert not rows, f"asked about the same title twice: {rows}"
+
+
+def test_verdicts_can_be_given_by_slate_position(app_env):
+    """Retyping a transliterated title is the friction most likely to stop feedback."""
+    cli, runner = app_env
+    teach(cli, runner, [
+        ("Kumbalangi Nights", "loved"), ("Jallikattu", "liked"), ("Morbius", "hated"),
+    ])
+    recs = run(cli, runner, "recs", "-k", "5", "--strategy", "mean")
+    assert recs.exit_code == 0, recs.output
+    first = slate_lines(recs.output)[0]
+
+    res = run(cli, runner, "loved", "1")
+    assert res.exit_code == 0, res.output
+    hist = run(cli, runner, "history")
+    # The title occupying position 1 is the one that got the verdict.
+    title = first.split("]")[0]
+    for token in first.replace("◆", "").replace("◇", "").split():
+        if token.isalpha() and len(token) > 3:
+            assert token in hist.output
+            break
+    del title
+
+
+def test_an_out_of_range_position_is_not_silently_accepted(app_env):
+    cli, runner = app_env
+    teach(cli, runner, [
+        ("Kumbalangi Nights", "loved"), ("Jallikattu", "liked"), ("Morbius", "hated"),
+    ])
+    run(cli, runner, "recs", "-k", "3", "--strategy", "mean")
+    res = run(cli, runner, "loved", "99")
+    assert res.exit_code == 1
+    # Must not fuzzy-match "99" onto the film "96".
+    assert "nothing matching" in res.output
+
+
+def test_a_numeric_title_still_resolves_when_there_is_no_slate(app_env):
+    """'96' is a real film. It must not be read as a slate position."""
+    cli, runner = app_env
+    res = run(cli, runner, "loved", "96")
+    assert res.exit_code == 0, res.output
+    assert "96" in run(cli, runner, "history").output

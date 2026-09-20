@@ -60,8 +60,40 @@ def _require_catalog() -> None:
         _fail("no catalogue yet — run `ent setup` first")
 
 
+def _from_last_slate(con, query: str) -> Match | None:
+    """Let a bare number refer to a position in the last recommended slate.
+
+    The daily loop is: ask for recommendations, watch one, say what you
+    thought. Retyping a title you just read off the screen — often a
+    transliterated one — is the friction most likely to stop someone giving
+    feedback at all, and feedback is the only thing this system runs on.
+    """
+    if not query.strip().isdigit():
+        return None
+    position = int(query.strip())
+    slate = store.get_meta(con, "last_slate", [])
+    if not slate or not (1 <= position <= len(slate)):
+        return None
+    item_id = int(slate[position - 1])
+    row = con.execute(
+        "SELECT item_id, title, original_title, year, kind, language, imdb_votes, imdb_rating "
+        "FROM titles WHERE item_id = ?",
+        [item_id],
+    ).fetchone()
+    if not row:
+        return None
+    return Match(
+        item_id=int(row[0]), title=row[1], original_title=row[2], year=row[3],
+        kind=row[4], language=row[5], imdb_votes=row[6], imdb_rating=row[7], score=1.0,
+    )
+
+
 def _pick(con, query: str, kind: str | None = None) -> Match | None:
     """Resolve a typed title, asking the user only when genuinely ambiguous."""
+    from_slate = _from_last_slate(con, query)
+    if from_slate is not None:
+        return from_slate
+
     match, alternatives = resolve_one(con, query, kind=kind)
     if match:
         return match
@@ -721,13 +753,16 @@ def recs(
             [(p.item_id, p.position, p.score, p.propensity, p.explored) for p in picks],
             policy=f"{strategy}-n{model.n_obs}",
         )
+        # Remembered so a verdict can be given by position rather than by
+        # retyping a title.
+        store.set_meta(con, "last_slate", [p.item_id for p in picks])
 
         full = store.item_rows(con, [p.item_id for p in picks])
 
     console.print()
-    for p in picks:
+    for n, p in enumerate(picks, start=1):
         row = full[p.item_id]
-        head = f"[bold]{row['title']}[/bold]"
+        head = f"[dim]{n:>2}[/dim] [bold]{row['title']}[/bold]"
         if row.get("original_title") and row["original_title"] != row["title"]:
             head += f" [dim]({row['original_title']})[/dim]"
         facts = [str(row["year"])] if row.get("year") else []
@@ -740,7 +775,7 @@ def recs(
         if row.get("imdb_rating"):
             facts.append(f"IMDb {row['imdb_rating']:.1f}")
         marker = "[magenta]◇[/magenta]" if p.explored else "[green]◆[/green]"
-        console.print(f"{marker} {head}  [dim]{' · '.join(facts)}[/dim]")
+        console.print(f"{marker}{head}  [dim]{' · '.join(facts)}[/dim]")
 
         genres = ", ".join((row.get("genres") or [])[:4])
         if genres:
@@ -757,7 +792,8 @@ def recs(
 
     console.print(
         "[dim]◆ confident pick   ◇ exploratory pick[/dim]\n"
-        "[dim]tell it what happened: [/dim][cyan]ent loved \"<title>\"[/cyan]"
+        "[dim]tell it what happened: [/dim][cyan]ent loved 3[/cyan]"
+        "[dim] (by position) or [/dim][cyan]ent loved \"<title>\"[/cyan]"
     )
 
 
