@@ -23,6 +23,19 @@ from .config import PATHS, PRIORITY_LANGUAGES, has_tmdb
 from .engine import Engine, liked_titles
 from .resolve import Match, resolve_one, search
 
+
+def _as_ten(value: float) -> float:
+    """Render a reward on a 0-10 scale a person can read.
+
+    The posterior is an unbounded linear model, so it will happily predict
+    10.4 for something squarely in the middle of what you love. That is
+    correct arithmetic and nonsense as a displayed score, so it is clamped —
+    at the display layer only. Clamping the model itself would distort the
+    ranking and throw away the information that one title is further along
+    the preference direction than another.
+    """
+    return float(min(10.0, max(0.0, value * 10.0)))
+
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
@@ -692,7 +705,9 @@ def recs(
         if p.reasons:
             because = "; ".join(f"{name}" for name, _ in p.reasons)
             console.print(f"    [dim]close to your: {because}[/dim]")
-        console.print(f"    [dim]predicted {p.mean * 10:.1f}/10 ± {p.std * 10:.1f}[/dim]\n")
+        console.print(
+            f"    [dim]predicted {_as_ten(p.mean):.1f}/10 ± {min(p.std * 10, 10.0):.1f}[/dim]\n"
+        )
 
     console.print(
         "[dim]◆ confident pick   ◇ exploratory pick[/dim]\n"
@@ -730,7 +745,7 @@ def why(title: str) -> None:
     console.print(
         Panel.fit(
             f"[bold]{match.label()}[/bold]\n\n"
-            f"predicted  [bold]{mean[0] * 10:.1f}/10[/bold]  ± {std[0] * 10:.1f}\n"
+            f"predicted  [bold]{_as_ten(mean[0]):.1f}/10[/bold]  ± {min(std[0] * 10, 10.0):.1f}\n"
             f"the ± is the model's own uncertainty; a wide band means it is guessing",
             border_style="cyan",
         )
