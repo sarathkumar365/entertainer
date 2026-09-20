@@ -41,6 +41,33 @@ TITLES = [
 GROUP_A = {0, 1, 2, 4, 13, 14}      # slow-burn, South Indian and Korean
 GROUP_B = {8, 9}                    # loud blockbusters
 
+# Filler, so that the cold-start pool has enough titles per language to be
+# representative. The elicitation code declines to treat a language with a
+# handful of entries as a stratum, which is right in production and awkward
+# in a fixture built from a dozen named films.
+FILLER_LANGUAGES = ("en", "ml", "ta", "ko", "hi", "kn")
+FILLER_PER_LANGUAGE = 14
+
+
+def _filler():
+    rows = []
+    for li, lang in enumerate(FILLER_LANGUAGES):
+        for j in range(FILLER_PER_LANGUAGE):
+            n = li * FILLER_PER_LANGUAGE + j
+            rows.append(
+                (
+                    f"tt2{n:07d}",
+                    f"Filler {lang.upper()} {j}",
+                    f"Filler {lang.upper()} {j}",
+                    1990 + (n % 33),
+                    "tv" if n % 7 == 0 else "movie",
+                    lang,
+                    5_000 + (n * 997) % 400_000,
+                    5.0 + (n % 45) / 10.0,
+                )
+            )
+    return rows
+
 
 @pytest.fixture()
 def app_env(tmp_path, monkeypatch):
@@ -62,8 +89,9 @@ def app_env(tmp_path, monkeypatch):
 
     config.PATHS.ensure()
 
+    rows = TITLES + _filler()
     con = store.connect()
-    for i, (imdb_id, title, original, year, kind, lang, votes, rating) in enumerate(TITLES):
+    for i, (imdb_id, title, original, year, kind, lang, votes, rating) in enumerate(rows):
         con.execute(
             """
             INSERT INTO titles
@@ -84,13 +112,13 @@ def app_env(tmp_path, monkeypatch):
     rng = np.random.default_rng(0)
     dim = 16
     anchors = rng.normal(size=(3, dim))
-    latent = np.empty((len(TITLES), dim), dtype=np.float32)
-    for i in range(len(TITLES)):
+    latent = np.empty((len(rows), dim), dtype=np.float32)
+    for i in range(len(rows)):
         anchor = anchors[0] if i in GROUP_A else (anchors[1] if i in GROUP_B else anchors[2])
-        latent[i] = anchor + 0.25 * rng.normal(size=dim)
+        latent[i] = anchor + (0.25 if i < len(TITLES) else 1.2) * rng.normal(size=dim)
     latent /= np.linalg.norm(latent, axis=1, keepdims=True)
 
-    ids = np.arange(len(TITLES), dtype=np.int32)
+    ids = np.arange(len(rows), dtype=np.int32)
     fusion.save(
         fusion.FusionArtifacts(
             item_ids=ids,
@@ -112,6 +140,15 @@ def run(cli, runner, *args, stdin: str | None = None):
     return runner.invoke(cli.app, list(args), input=stdin, catch_exceptions=False)
 
 
+def slate_lines(output: str) -> list[str]:
+    """The recommendation header lines, excluding the legend that shares their glyph."""
+    return [
+        ln
+        for ln in output.splitlines()
+        if ln.startswith(("◆", "◇")) and "confident pick" not in ln
+    ]
+
+
 def teach(cli, runner, pairs):
     for title, verdict in pairs:
         res = run(cli, runner, verdict, title)
@@ -122,7 +159,7 @@ def test_stats_reports_the_catalogue(app_env):
     cli, runner = app_env
     res = run(cli, runner, "stats")
     assert res.exit_code == 0
-    assert "16" in res.output
+    assert f"{len(TITLES) + len(_filler()):,}" in res.output
     assert "ml" in res.output
 
 
@@ -191,8 +228,9 @@ def test_language_filter_is_hard(app_env):
     teach(cli, runner, [("Kumbalangi Nights", "loved"), ("Morbius", "hated"), ("96", "liked")])
     res = run(cli, runner, "recs", "--lang", "ko", "-k", "3", "--strategy", "mean")
     assert res.exit_code == 0, res.output
-    assert "Korean" in res.output
-    assert "Tamil" not in res.output
+    headers = slate_lines(res.output)
+    assert headers
+    assert all("Korean" in ln for ln in headers), headers
 
 
 def test_series_filter(app_env):
@@ -200,7 +238,9 @@ def test_series_filter(app_env):
     teach(cli, runner, [("Kumbalangi Nights", "loved"), ("Morbius", "hated"), ("96", "liked")])
     res = run(cli, runner, "recs", "--series", "-k", "3", "--strategy", "mean")
     assert res.exit_code == 0, res.output
-    assert "Breaking Bad" in res.output or "Dark" in res.output
+    headers = slate_lines(res.output)
+    assert headers
+    assert all("series" in ln for ln in headers), headers
 
 
 def test_rated_titles_are_never_recommended_back(app_env):
@@ -212,7 +252,7 @@ def test_rated_titles_are_never_recommended_back(app_env):
     res = run(cli, runner, "recs", "-k", "10", "--strategy", "mean")
     # Only the slate's own header lines count; the explanation lines name the
     # user's own rated titles on purpose.
-    headers = [ln for ln in res.output.splitlines() if ln.startswith(("◆", "◇"))]
+    headers = slate_lines(res.output)
     assert headers
     joined = " ".join(headers)
     for rated in ("Jallikattu", "Kumbalangi", "Morbius", "96 "):
@@ -328,3 +368,43 @@ def test_unknown_title_fails_cleanly(app_env):
     res = run(cli, runner, "loved", "zzzz nonexistent qqqq")
     assert res.exit_code == 1
     assert "nothing matching" in res.output
+
+
+def test_onboard_asks_across_languages_and_records_answers(app_env):
+    """The cold-start loop, driven the way a person drives it."""
+    cli, runner = app_env
+    # l=loved, i=liked, m=meh, d=disliked, n=haven't seen, q=stop.
+    answers = "l\ni\nn\nd\nl\nm\ni\nn\nd\nl\nq\n"
+    res = run(cli, runner, "onboard", "--n", "8", stdin=answers)
+    assert res.exit_code == 0, res.output
+    assert "verdicts recorded" in res.output
+
+    hist = run(cli, runner, "history")
+    assert hist.exit_code == 0
+    languages = {
+        line.split("│")[4].strip()
+        for line in hist.output.splitlines()
+        if line.startswith("│") and "lang" not in line
+    }
+    assert len(languages - {""}) >= 2, languages
+
+
+def test_onboard_stops_when_asked(app_env):
+    cli, runner = app_env
+    res = run(cli, runner, "onboard", "--n", "20", stdin="l\nq\n")
+    assert res.exit_code == 0, res.output
+    assert "1 verdicts recorded" in res.output
+
+
+def test_onboard_can_be_pointed_at_specific_languages(app_env):
+    cli, runner = app_env
+    res = run(cli, runner, "onboard", "--n", "4", "--languages", "ml,ta",
+              stdin="l\ni\nl\ni\n")
+    assert res.exit_code == 0, res.output
+    hist = run(cli, runner, "history")
+    languages = {
+        line.split("│")[4].strip()
+        for line in hist.output.splitlines()
+        if line.startswith("│") and "lang" not in line
+    }
+    assert languages - {""} <= {"ml", "ta"}, languages
