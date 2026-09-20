@@ -199,52 +199,58 @@ class TasteModel:
 
 
 def _evidence_fit(
-    phi: np.ndarray, y: np.ndarray, iters: int = 80, tol: float = 1e-6
+    phi: np.ndarray, y: np.ndarray, iters: int = 200, tol: float = 1e-7
 ) -> tuple[np.ndarray, np.ndarray, float, float, float]:
     """Empirical-Bayes (MacKay) fit of a Bayesian linear model.
 
-    Both the prior precision and the noise precision are learned from the
-    data by maximising the marginal likelihood, so there is nothing to
+    Both the prior precision and the noise precision are learned from the data
+    by maximising the marginal likelihood, so there is nothing to
     cross-validate — which matters when the entire dataset is forty films and
     a held-out split would be mostly noise.
+
+    The Gram matrix is diagonalised once up front. In the eigenbasis the
+    posterior is diagonal, so each hyperparameter iteration costs O(f) rather
+    than the O(f^3) of re-inverting the precision matrix every time. That
+    turns the hyperparameter search from the dominant cost into a rounding
+    error, which is what makes it affordable to refit from scratch on every
+    command and to run a full leave-future-out audit over an entire history.
     """
     n, f = phi.shape
-    alpha, beta = 1.0, 4.0
     gram = phi.T @ phi
     rhs = phi.T @ y
-    eigs = np.linalg.eigvalsh(gram)
+
+    # gram = V diag(eigs) V^T, symmetric positive semi-definite.
+    eigs, V = np.linalg.eigh(gram)
     eigs = np.maximum(eigs, 0.0)
+    Vt_rhs = V.T @ rhs
+    y_sq = float(y @ y)
 
-    mean = np.zeros(f)
-    cov = np.eye(f)
+    alpha, beta = 1.0, 4.0
     for _ in range(iters):
-        precision = alpha * np.eye(f) + beta * gram
-        cov = np.linalg.inv(precision)
-        mean = beta * (cov @ rhs)
+        denom = alpha + beta * eigs
+        m_eig = beta * Vt_rhs / denom          # posterior mean in the eigenbasis
+        mtm = float(m_eig @ m_eig)
+        gamma = float(np.sum(beta * eigs / denom))
+        # ||y - phi m||^2 evaluated without forming phi m.
+        resid = max(y_sq - 2.0 * float(m_eig @ Vt_rhs) + float((m_eig ** 2) @ eigs), 1e-12)
 
-        lam = beta * eigs
-        gamma = float(np.sum(lam / (alpha + lam)))
-        mtm = float(mean @ mean)
-        new_alpha = gamma / max(mtm, 1e-9)
-        resid = float(((y - phi @ mean) ** 2).sum())
-        new_beta = max(n - gamma, 1e-6) / max(resid, 1e-9)
-
-        new_alpha = float(np.clip(new_alpha, 1e-4, 1e6))
-        new_beta = float(np.clip(new_beta, 1e-4, 1e6))
-        if abs(new_alpha - alpha) < tol and abs(new_beta - beta) < tol:
-            alpha, beta = new_alpha, new_beta
-            break
+        new_alpha = float(np.clip(gamma / max(mtm, 1e-9), 1e-4, 1e6))
+        new_beta = float(np.clip(max(n - gamma, 1e-6) / resid, 1e-4, 1e6))
+        converged = abs(new_alpha - alpha) < tol and abs(new_beta - beta) < tol
         alpha, beta = new_alpha, new_beta
+        if converged:
+            break
 
-    precision = alpha * np.eye(f) + beta * gram
-    cov = np.linalg.inv(precision)
-    mean = beta * (cov @ rhs)
-    resid = float(((y - phi @ mean) ** 2).sum())
-    sign, logdet = np.linalg.slogdet(precision)
+    denom = alpha + beta * eigs
+    m_eig = beta * Vt_rhs / denom
+    mean = V @ m_eig
+    cov = (V / denom) @ V.T
+    resid = max(y_sq - 2.0 * float(m_eig @ Vt_rhs) + float((m_eig ** 2) @ eigs), 1e-12)
+    logdet = float(np.sum(np.log(denom)))
     log_evidence = 0.5 * (
         f * np.log(alpha) + n * np.log(beta)
-        - beta * resid - alpha * float(mean @ mean)
-        - (logdet if sign > 0 else 0.0) - n * np.log(2 * np.pi)
+        - beta * resid - alpha * float(m_eig @ m_eig)
+        - logdet - n * np.log(2 * np.pi)
     )
     return mean, cov, alpha, beta, float(log_evidence)
 

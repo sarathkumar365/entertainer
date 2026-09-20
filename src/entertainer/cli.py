@@ -774,6 +774,79 @@ def import_profile(path: Path = typer.Argument(...)) -> None:
     console.print(f"[green]imported {imported:,}[/green]" + (f", [yellow]{missing} not in catalogue[/yellow]" if missing else ""))
 
 
+@app.command()
+def audit(
+    interval: float = typer.Option(0.90, help="Nominal coverage of the predictive interval."),
+) -> None:
+    """Measure whether the engine is actually learning *you*, on your own history.
+
+    Walks your verdicts in order, refits on everything before each one and
+    predicts it blind. Every number here comes from a model that had not seen
+    the answer.
+    """
+    from .evaluation.prequential import run as prequential
+
+    _require_catalog()
+    engine = Engine()
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT item_id, value, ts FROM events
+            WHERE kind = 'rate' AND value IS NOT NULL ORDER BY ts
+            """
+        ).fetchall()
+        fs = engine.features(con)
+
+    seen: set[int] = set()
+    items, rewards = [], []
+    for item_id, value, _ in rows:
+        iid = int(item_id)
+        if iid in seen or iid not in fs.index:
+            continue
+        seen.add(iid)
+        items.append(iid)
+        rewards.append(float(value) / 10.0)
+
+    if len(items) < 8:
+        _fail(f"only {len(items)} verdicts — this needs at least 8 to say anything honest")
+
+    res = prequential(fs, items, rewards, interval=interval)
+    early, late = res.trend()
+    slope, p_slope = res.learning_slope()
+    rho, p_rho = res.spearman()
+
+    table = Table("measure", "value", "reading")
+    table.add_row("verdicts used", f"{len(items)}", "")
+    table.add_row(
+        "mean absolute error", f"{res.mae() * 10:.2f} / 10",
+        "lower is better",
+    )
+    table.add_row(
+        "vs running-average baseline", f"{res.baseline_mae() * 10:.2f} / 10",
+        "[green]model wins[/green]" if res.mae() < res.baseline_mae() else "[red]model loses[/red]",
+    )
+    table.add_row(
+        "error: first vs last", f"{early * 10:.2f} → {late * 10:.2f}",
+        "[green]improving[/green]" if late < early else "[yellow]flat or worse[/yellow]",
+    )
+    table.add_row(
+        "learning slope", f"{slope * 100:+.3f} per 100 verdicts",
+        "[green]significant[/green]" if p_slope < 0.05 and slope < 0 else f"p={p_slope:.3f}",
+    )
+    table.add_row(
+        f"{interval:.0%} interval coverage", f"{res.coverage():.2f}",
+        "[green]calibrated[/green]" if abs(res.coverage() - interval) < 0.12 else "[yellow]miscalibrated[/yellow]",
+    )
+    table.add_row(
+        "rank correlation", f"{rho:+.3f}" if rho == rho else "—",
+        f"p={p_rho:.4f}" if p_rho == p_rho else "need more data",
+    )
+    console.print(table)
+    console.print(
+        "[dim]every prediction above was made by a model that had not seen that verdict[/dim]"
+    )
+
+
 @app.command("eval")
 def evaluate(
     users: int = typer.Option(300, help="How many held-out MovieLens users to replay."),

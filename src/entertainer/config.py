@@ -147,14 +147,14 @@ REGION_TO_LANGUAGE = {
 # cultural footprint of 50,000 votes on an American one.
 VOTE_FLOOR_DEFAULT = 2000
 VOTE_FLOOR_BY_LANGUAGE: dict[str, int] = {
-    "ta": 300,
-    "ml": 200,
-    "te": 300,
-    "kn": 150,
-    "bn": 150,
-    "mr": 150,
-    "hi": 500,
-    "ko": 400,
+    "ta": 200,
+    "ml": 120,
+    "te": 200,
+    "kn": 100,
+    "bn": 120,
+    "mr": 120,
+    "hi": 400,
+    "ko": 300,
     "ja": 400,
     "fa": 150,
     "th": 200,
