@@ -166,3 +166,37 @@ def test_candidate_set_excludes_only_what_the_engine_was_told(fake_movielens):
     # Some hits must actually be achievable, otherwise the task is impossible
     # and the comparison is vacuous.
     assert max(r["recall@10"] for r in rows) > 0.0
+
+
+def test_elicitation_is_not_recomputed_per_user(fake_movielens, monkeypatch):
+    """The opening ladder depends only on the catalogue, so it is built once."""
+    calls = {"n": 0}
+    original = simulate.elicit.seed_questions
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(simulate.elicit, "seed_questions", counted)
+
+    fs, meta, item_map, _ = fake_movielens
+    cfg = simulate.SimConfig(n_users=8, budget=10, seed=4)
+    histories = dict(list(_histories(item_map).items())[:8])
+    simulate.run(fs, meta, histories, cfg, arms=("entertainer",))
+    assert calls["n"] == 1, calls
+
+
+def test_the_population_prior_arm_is_separable(fake_movielens):
+    """Both engine arms must run, so the prior's contribution can be measured."""
+    fs, meta, item_map, _ = fake_movielens
+    cfg = simulate.SimConfig(n_users=10, budget=12, seed=5)
+    histories = dict(list(_histories(item_map).items())[:10])
+    results = simulate.run(
+        fs, meta, histories, cfg, arms=("entertainer", "entertainer-flat-prior")
+    )
+    assert results["entertainer"].per_user
+    assert results["entertainer-flat-prior"].per_user
+    # With prior=None the two arms are the same computation and must agree.
+    a = results["entertainer"].summary()["ndcg@10"]
+    b = results["entertainer-flat-prior"].summary()["ndcg@10"]
+    assert a == pytest.approx(b)

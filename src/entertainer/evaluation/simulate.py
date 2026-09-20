@@ -122,6 +122,7 @@ def _run_elicitation(
     cfg: SimConfig,
     pool: np.ndarray,
     rng: np.random.Generator,
+    seeds: list[int],
 ) -> list[tuple[int, float]]:
     """Play the two-phase elicitation against a simulated user.
 
@@ -131,22 +132,25 @@ def _run_elicitation(
     """
     answered: list[tuple[int, float]] = []
     asked: set[int] = set()
+    cursor = 0
 
-    for item in elicit.seed_questions(fs, meta, k=cfg.seed_questions * 4, pool=pool):
+    while cursor < len(seeds):
+        item = seeds[cursor]
+        cursor += 1
         if len(answered) >= cfg.budget or len(asked) >= cfg.max_asks:
             break
         asked.add(item)
         if item in known:
             answered.append((item, _rating_to_reward(known[item])))
+        if len(answered) >= 3 and cursor >= cfg.seed_questions * 4:
+            break
 
     while len(answered) < cfg.budget and len(asked) < cfg.max_asks:
         if len(answered) < 3:
-            # Not enough signal for a posterior yet; keep widening coverage.
-            batch = [
-                i
-                for i in elicit.seed_questions(fs, meta, k=cfg.seed_questions * 8, pool=pool)
-                if i not in asked
-            ][: cfg.seed_questions]
+            # Not enough signal for a posterior yet; keep widening coverage
+            # from the precomputed seed ladder.
+            batch = [i for i in seeds[cursor:] if i not in asked][: cfg.seed_questions]
+            cursor += len(batch)
             if not batch:
                 break
         else:
@@ -303,6 +307,13 @@ def run(
     pool = elicit.recognisable_pool(fs, meta)
     console.print(f"[dim]elicitation pool: {pool.size:,} recognisable titles[/dim]")
 
+    # The opening ladder is the same for everyone by construction — it depends
+    # only on the catalogue — so computing it per simulated user was pure
+    # waste. Built once, long enough that a user who says "haven't seen it" to
+    # most of it still has questions left.
+    seeds = elicit.seed_questions(fs, meta, k=cfg.max_asks, pool=pool)
+    console.print(f"[dim]opening ladder: {len(seeds)} titles[/dim]")
+
     with Progress(
         TextColumn("[bold blue]simulating"),
         BarColumn(),
@@ -319,7 +330,7 @@ def run(
             if elicitation == "random":
                 answered = _random_elicitation(known, cfg, rng)
             else:
-                answered = _run_elicitation(fs, meta, known, cfg, pool, rng)
+                answered = _run_elicitation(fs, meta, known, cfg, pool, rng, seeds)
             if len(answered) < 3:
                 bar.advance(task)
                 continue
