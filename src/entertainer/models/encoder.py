@@ -32,21 +32,36 @@ def _device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def load_model(name: str | None = None):
+def _build(target: str, dev: str):
+    """Instantiate the encoder, tolerating the 5.x -> 6.x keyword rename.
+
+    Qwen3 embedding models want left padding (they pool the final token), and
+    sentence-transformers renamed the argument that sets it. Trying the new
+    name first and falling back keeps this working on either version rather
+    than pinning the whole project to one.
+    """
     from sentence_transformers import SentenceTransformer
 
+    model_kwargs = {"torch_dtype": "float16"} if dev == "cuda" else {}
+    pad = {"padding_side": "left"}
+    for kw in ({"processor_kwargs": pad}, {"tokenizer_kwargs": pad}, {}):
+        try:
+            return SentenceTransformer(target, device=dev, model_kwargs=model_kwargs, **kw)
+        except TypeError:
+            continue
+    return SentenceTransformer(target, device=dev)
+
+
+def load_model(name: str | None = None):
     dev = _device()
     target = name or ENCODER_MODEL
     try:
-        model = SentenceTransformer(
-            target,
-            device=dev,
-            model_kwargs={"torch_dtype": "float16"} if dev == "cuda" else {},
-            tokenizer_kwargs={"padding_side": "left"},
-        )
+        model = _build(target, dev)
     except Exception as exc:
-        console.print(f"[yellow]{target} unavailable ({exc}); falling back to {ENCODER_FALLBACK}[/yellow]")
-        model = SentenceTransformer(ENCODER_FALLBACK, device=dev)
+        console.print(
+            f"[yellow]{target} unavailable ({exc}); falling back to {ENCODER_FALLBACK}[/yellow]"
+        )
+        model = _build(ENCODER_FALLBACK, dev)
     model.max_seq_length = 384
     return model
 

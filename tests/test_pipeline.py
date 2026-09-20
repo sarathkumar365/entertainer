@@ -227,3 +227,42 @@ def test_nearest_liked_explanations_are_relevant(world):
     reasons = nearest_liked(fs.latent[target], fs.latent[fs.rows_for(liked)], labels, top=3)
     assert reasons
     assert all(sim > 0 for _, sim in reasons)
+
+
+def test_explore_knob_widens_the_slate(world):
+    """The risk dial must actually change behaviour in the stated direction."""
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(5)
+    train = rng.choice(N_ITEMS, size=30, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+
+    def spread(explore):
+        slates = [
+            {
+                p.item_id
+                for p in recommend(
+                    model, fs, meta, k=10, rng=np.random.default_rng(s),
+                    strategy="thompson", explore=explore,
+                )
+            }
+            for s in range(6)
+        ]
+        return len(set.union(*slates))
+
+    assert spread(0.0) < spread(1.0) < spread(3.0)
+
+
+def test_novelty_penalty_shifts_towards_less_seen_titles(world):
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(5)
+    train = rng.choice(N_ITEMS, size=60, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+
+    def mean_votes(novelty):
+        picks = recommend(
+            model, fs, meta, k=10, rng=np.random.default_rng(3),
+            strategy="mean", novelty=novelty,
+        )
+        return np.mean([meta[p.item_id]["imdb_votes"] for p in picks])
+
+    assert mean_votes(1.5) < mean_votes(0.0)

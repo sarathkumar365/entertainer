@@ -136,21 +136,33 @@ class TasteModel:
         var = np.einsum("ij,jk,ik->i", phi, self.cov, phi) + 1.0 / self.beta
         return mu, np.sqrt(np.maximum(var, 1e-12))
 
-    def sample_weights(self, rng: np.random.Generator, n: int = 1) -> np.ndarray:
+    def sample_weights(
+        self, rng: np.random.Generator, n: int = 1, temperature: float = 1.0
+    ) -> np.ndarray:
+        """Draw weight vectors from the posterior.
+
+        ``temperature`` scales the posterior standard deviation. 1.0 is exact
+        Thompson sampling and is the theoretically right default. Below 1.0
+        the policy becomes more conservative, above 1.0 more adventurous —
+        which is not a better algorithm, it is a knob for a person who knows
+        whether they want a safe evening or a surprising one.
+        """
         if self._chol is None:
             jitter = 1e-8 * np.eye(self.cov.shape[0])
             self._chol = np.linalg.cholesky(self.cov + jitter)
         z = rng.standard_normal(size=(self.mean.shape[0], n))
-        return (self.mean[:, None] + self._chol @ z).T
+        return (self.mean[:, None] + temperature * (self._chol @ z)).T
 
-    def thompson_scores(self, X: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def thompson_scores(
+        self, X: np.ndarray, rng: np.random.Generator, temperature: float = 1.0
+    ) -> np.ndarray:
         """One posterior draw, scored across every candidate.
 
         A single shared draw (not one per item) is what makes this Thompson
         sampling rather than noisy greedy: it samples a coherent hypothesis
         about the user and then acts optimally under it.
         """
-        w = self.sample_weights(rng, 1)[0]
+        w = self.sample_weights(rng, 1, temperature=temperature)[0]
         return self.feature_map(X) @ w + self.y_mean
 
     def ucb_scores(self, X: np.ndarray, kappa: float = 1.0) -> np.ndarray:

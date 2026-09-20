@@ -144,6 +144,8 @@ def recommend(
     mmr_lambda: float = 0.72,
     shortlist: int = 400,
     max_language_share: float = 0.5,
+    explore: float = 1.0,
+    novelty: float = 0.0,
 ) -> list[Recommendation]:
     rng = rng or np.random.default_rng()
     filters = filters or Filters()
@@ -159,9 +161,21 @@ def recommend(
     if strategy == "mean":
         scores = mean
     elif strategy == "ucb":
-        scores = model.ucb_scores(X, kappa=1.0)
+        scores = model.ucb_scores(X, kappa=max(explore, 0.0))
     else:
-        scores = model.thompson_scores(X, rng)
+        scores = model.thompson_scores(X, rng, temperature=max(explore, 0.0))
+
+    if novelty > 0.0:
+        # Push away from the canon. Scored on log votes rather than a hard
+        # popularity cut, so a widely-loved film is discouraged rather than
+        # banned — the user asked for the road less travelled, not for the
+        # obscure at any cost.
+        votes = np.array(
+            [float((meta.get(int(i)) or {}).get("imdb_votes") or 0) for i in fs.item_ids[idx]]
+        )
+        exposure = np.log1p(votes)
+        exposure = (exposure - exposure.mean()) / (exposure.std() + 1e-9)
+        scores = scores - novelty * float(np.std(scores)) * exposure
 
     top = np.argsort(-scores)[: min(shortlist, idx.size)]
     latent = fs.latent[idx]

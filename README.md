@@ -208,6 +208,9 @@ ent recs                             # what to watch
 ent recs --lang ml,ta --movies -k 15
 ent recs --series --since 2020
 ent recs --strategy mean             # no exploration, safest picks
+ent recs --explore 2.5               # feeling adventurous
+ent recs --novelty 1.0               # push away from the canon
+ent similar "Jallikattu"             # pure geometry, ignores your profile
 
 ent loved "Jallikattu"               # teach it, by name
 ent disliked "Morbius"
@@ -215,8 +218,10 @@ ent bulk my_films.txt                # one title per line, optional `| verdict`
 
 ent taste                            # what it worked out about you
 ent why "Memories of Murder"         # why it thinks you'd like this
+ent forget "Morbius"                 # remove a verdict entirely
 ent history
 ent stats
+ent audit                            # is it actually learning you?
 
 ent eval --users 300 --budget 30     # benchmark against baselines
 ent export                           # back up your verdicts

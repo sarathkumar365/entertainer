@@ -513,6 +513,12 @@ def recs(
     strategy: str = typer.Option(
         "thompson", help="thompson (explores) | mean (safest) | ucb (optimistic)."
     ),
+    explore: float = typer.Option(
+        1.0, help="Appetite for risk. 1.0 is exact Thompson sampling; 0 is greedy; 2 is reckless."
+    ),
+    novelty: float = typer.Option(
+        0.0, help="Push away from the canon. 0 = no penalty, 1 = strongly prefer the obscure."
+    ),
     why: bool = typer.Option(True, help="Show which of your own titles each pick resembles."),
 ) -> None:
     """Recommend what to watch next."""
@@ -535,7 +541,10 @@ def recs(
             max_runtime=max_runtime,
             exclude=frozenset(store.interacted(con)),
         )
-        picks = recommend(model, fs, meta, k=k, filters=filters, strategy=strategy)
+        picks = recommend(
+            model, fs, meta, k=k, filters=filters, strategy=strategy,
+            explore=explore, novelty=novelty,
+        )
         if not picks:
             _fail("no candidates survived those filters")
 
