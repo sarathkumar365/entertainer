@@ -203,7 +203,7 @@ def test_active_elicitation_beats_random_questioning(world):
 
 
 def test_discovered_axes_name_the_planted_structure(world):
-    fs, meta, reward, cluster = world["fs"], world["meta"], world["reward"], world["cluster"]
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
     rng = np.random.default_rng(9)
     train = rng.choice(N_ITEMS, size=60, replace=False)
     model = fit(fs.vectors_for(train), reward[train])

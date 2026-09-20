@@ -52,13 +52,14 @@ def load_model(name: str | None = None):
 
 
 def _truncate(mat: np.ndarray, dim: int) -> np.ndarray:
-    """Matryoshka truncation followed by renormalisation."""
-    if mat.shape[1] <= dim:
-        out = mat
-    else:
-        out = mat[:, :dim]
+    """Matryoshka truncation followed by renormalisation.
+
+    Copies rather than slicing in place: ``mat[:, :dim]`` is a view, and
+    normalising through it would silently rewrite the caller's array.
+    """
+    out = np.array(mat[:, :dim] if mat.shape[1] > dim else mat, dtype=np.float32, copy=True)
     norms = np.linalg.norm(out, axis=1, keepdims=True)
-    np.divide(out, np.maximum(norms, 1e-9), out=out)
+    out /= np.maximum(norms, 1e-9)
     return out
 
 

@@ -21,8 +21,10 @@ import numpy as np
 from . import store
 from .config import PATHS
 from .models import fusion
-from .models.features import FeatureSpace, build as build_features
-from .models.taste import TasteModel, fit as fit_taste, verdict_to_reward
+from .models.features import FeatureSpace
+from .models.features import build as build_features
+from .models.taste import TasteModel, verdict_to_reward
+from .models.taste import fit as fit_taste
 
 # Roughly three years. Long enough that a full history still counts, short
 # enough that a decisive shift in taste is reflected within a season or two.

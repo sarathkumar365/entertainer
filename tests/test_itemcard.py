@@ -1,6 +1,5 @@
 from entertainer.models.itemcard import build_card
 
-
 BASE = {
     "title": "Kumbalangi Nights",
     "original_title": "Kumbalangi Nights",

@@ -58,19 +58,7 @@ class Filters:
             if r is None:
                 keep[i] = False
                 continue
-            if langs and (r.get("language") not in langs):
-                keep[i] = False
-            elif self.kind and r.get("kind") != self.kind:
-                keep[i] = False
-            elif self.min_year and (r.get("year") or 0) < self.min_year:
-                keep[i] = False
-            elif self.max_year and (r.get("year") or 9999) > self.max_year:
-                keep[i] = False
-            elif self.max_runtime and (r.get("runtime") or 0) > self.max_runtime:
-                keep[i] = False
-            elif self.min_runtime and (r.get("runtime") or 0) < self.min_runtime:
-                keep[i] = False
-            elif self.min_votes and (r.get("imdb_votes") or 0) < self.min_votes:
+            if langs and (r.get("language") not in langs) or self.kind and r.get("kind") != self.kind or self.min_year and (r.get("year") or 0) < self.min_year or self.max_year and (r.get("year") or 9999) > self.max_year or self.max_runtime and (r.get("runtime") or 0) > self.max_runtime or self.min_runtime and (r.get("runtime") or 0) < self.min_runtime or self.min_votes and (r.get("imdb_votes") or 0) < self.min_votes:
                 keep[i] = False
         return keep
 
