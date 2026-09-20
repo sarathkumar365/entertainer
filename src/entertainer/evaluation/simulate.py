@@ -86,7 +86,7 @@ def load_user_histories(
     """Sample MovieLens users and map their ratings onto catalogue item ids."""
     df = cf_mod.load_ratings()
     known = pl.Series("movieId", list(item_of_movielens.keys()), dtype=pl.Int32)
-    df = df.filter(pl.col("movieId").is_in(known))
+    df = df.filter(pl.col("movieId").is_in(known.implode()))
 
     counts = df.group_by("userId").len().filter(pl.col("len") >= min_history)
     rng = np.random.default_rng(seed)
@@ -95,7 +95,7 @@ def load_user_histories(
         return {}
     picked = rng.choice(candidates, size=min(n_users, candidates.size), replace=False)
 
-    sub = df.filter(pl.col("userId").is_in(pl.Series(picked.astype(np.int32))))
+    sub = df.filter(pl.col("userId").is_in(pl.Series(picked.astype(np.int32)).implode()))
     out: dict[int, dict[int, float]] = {}
     for uid, movie, rating in zip(
         sub["userId"].to_list(), sub["movieId"].to_list(), sub["rating"].to_list(), strict=True

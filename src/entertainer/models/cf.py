@@ -128,7 +128,7 @@ def fit(
     console.print(f"[dim]MovieLens ratings: {df.height:,}[/dim]")
     if holdout_users is not None and len(holdout_users):
         before = df.height
-        df = df.filter(~pl.col("userId").is_in(pl.Series(holdout_users.astype(np.int32))))
+        df = df.filter(~pl.col("userId").is_in(pl.Series(holdout_users.astype(np.int32)).implode()))
         console.print(f"[dim]held out {len(holdout_users):,} users "
                       f"({before - df.height:,} ratings) from CF training[/dim]")
     mat, users, items = build_matrix(df, signal=signal)
