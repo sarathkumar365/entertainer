@@ -76,9 +76,9 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.delenv("TMDB_BEARER", raising=False)
 
     from entertainer import config, engine, store
-    from entertainer.models import encoder, fusion
+    from entertainer.models import cf, encoder, fusion
 
-    for mod in (config, store, engine, encoder, fusion):
+    for mod in (config, store, engine, cf, encoder, fusion):
         importlib.reload(mod)
     from entertainer import cli, recommend, resolve
     from entertainer.coldstart import elicit
@@ -133,6 +133,12 @@ def app_env(tmp_path, monkeypatch):
         )
     )
     encoder.save(ids, latent)
+
+    # A complete artifact set, so `stats` reports a finished pipeline rather
+    # than reporting the fixture's own gaps.
+    from entertainer.models import cf
+
+    cf.save(ids[: len(TITLES)], latent[: len(TITLES)])
     return cli, CliRunner()
 
 
@@ -489,3 +495,18 @@ def test_a_numeric_title_still_resolves_when_there_is_no_slate(app_env):
     res = run(cli, runner, "loved", "96")
     assert res.exit_code == 0, res.output
     assert "96" in run(cli, runner, "history").output
+
+
+def test_stats_says_what_to_run_next(app_env):
+    """An eight-stage pipeline with a three-hour critical path must say where it got to."""
+    cli, runner = app_env
+    fresh = run(cli, runner, "stats")
+    assert fresh.exit_code == 0
+    assert "ent onboard" in fresh.output
+
+    teach(cli, runner, [
+        ("Kumbalangi Nights", "loved"), ("Jallikattu", "liked"), ("Morbius", "hated"),
+        ("Whiplash", "liked"),
+    ])
+    warmed = run(cli, runner, "stats")
+    assert "ent recs" in warmed.output

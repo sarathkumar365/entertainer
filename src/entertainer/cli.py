@@ -972,17 +972,46 @@ def taste(axes: int = typer.Option(6, help="How many latent axes to describe."))
 # --- introspection ----------------------------------------------------------
 
 
+def _next_step(present: dict[str, bool], n_ratings: int) -> str:
+    """What to run next, given what exists.
+
+    A pipeline with eight stages and a three-hour critical path needs to be
+    able to say where it got to. Ordered by dependency, first gap wins.
+    """
+    if not present["catalog"]:
+        return "ent setup"
+    if not present["content_embeddings"]:
+        return "ent data embed"
+    if not present["cf_factors"]:
+        return "ent data cf"
+    if not present["fused_space"]:
+        return "ent data fuse"
+    if n_ratings < 3:
+        return "ent onboard    [dim](or: ent bulk seed.example.txt)[/dim]"
+    if n_ratings < 8:
+        return "ent recs    [dim](a few more verdicts and `ent audit` will work too)[/dim]"
+    return "ent recs"
+
+
 @app.command()
 def stats() -> None:
-    """Show what exists and how much the engine knows."""
+    """Show what exists, how much the engine knows, and what to run next."""
     engine = Engine()
+    present = engine.artifacts_present
     table = Table("component", "state")
-    for name, ok in engine.artifacts_present.items():
+    for name, ok in present.items():
         table.add_row(name.replace("_", " "), "[green]ready[/green]" if ok else "[red]missing[/red]")
+    table.add_row(
+        "population prior",
+        "[green]ready[/green]"
+        if (PATHS.artifacts / "population_prior.npz").exists()
+        else "[yellow]absent[/yellow]  [dim]optional: ent data prior[/dim]",
+    )
     table.add_row("tmdb credentials", "[green]set[/green]" if has_tmdb() else "[yellow]absent[/yellow]")
     console.print(table)
 
     if not PATHS.catalog_db.exists():
+        console.print("\n[bold]next:[/bold] [cyan]ent setup[/cyan]")
         return
     with store.session(read_only=True) as con:
         c = store.counts(con)
@@ -997,6 +1026,7 @@ def stats() -> None:
     for lang, n in langs:
         t3.add_row(f"{lang} ({language_label(lang)})", f"{n:,}")
     console.print(t3)
+    console.print(f"\n[bold]next:[/bold] [cyan]{_next_step(present, c['ratings'])}[/cyan]")
 
 
 @app.command()
