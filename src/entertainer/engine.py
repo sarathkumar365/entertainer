@@ -127,11 +127,11 @@ class Engine:
         # is informative but far less so than saying they disliked it. They are
         # flagged rather than identified later by their reward value, since a
         # stated verdict could coincide with that value.
-        for item_id in store.negatives(con):
+        for item_id, age in store.negatives(con):
             if int(item_id) in fs.index:
                 ids.append(int(item_id))
                 rewards.append(SKIP_REWARD)
-                ages.append(0.0)
+                ages.append(float(age))
                 weak.append(True)
         return (
             np.array(ids, dtype=np.int64),

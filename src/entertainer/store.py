@@ -163,15 +163,23 @@ def ratings(con: duckdb.DuckDBPyConnection) -> list[tuple[int, float]]:
     ).fetchall()
 
 
-def negatives(con: duckdb.DuckDBPyConnection) -> list[int]:
-    """Items explicitly pushed away (skipped or dismissed) and never rated."""
+def negatives(con: duckdb.DuckDBPyConnection) -> list[tuple[int, float]]:
+    """(item_id, age_in_days) for titles pushed away without being watched.
+
+    A dismissal is weaker evidence than a verdict — "not tonight" is not "I
+    disliked this" — but it is evidence, and it is the only negative signal
+    available for titles the user never gets round to watching. Ages are
+    returned so dismissals decay with time like everything else: what you did
+    not fancy two years ago says little about tonight.
+    """
     return [
-        r[0]
+        (int(r[0]), float(r[1] or 0))
         for r in con.execute(
             """
-            SELECT DISTINCT item_id FROM events
+            SELECT item_id, min(date_diff('day', ts, now())) AS age FROM events
             WHERE kind IN ('skip', 'dismiss')
               AND item_id NOT IN (SELECT item_id FROM events WHERE kind = 'rate')
+            GROUP BY item_id
             """
         ).fetchall()
     ]

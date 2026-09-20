@@ -534,3 +534,42 @@ def test_audit_says_when_there_is_too_little_logged_feedback(app_env):
     assert res.exit_code == 0, res.output
     assert "off-policy check" in res.output
     assert "needs 30" in res.output
+
+
+def test_dismiss_removes_from_circulation_as_a_weak_negative(app_env):
+    """Declining to watch is evidence, but much weaker than watching and disliking."""
+    cli, runner = app_env
+    from entertainer import store
+    from entertainer.engine import SKIP_REWARD, Engine
+
+    teach(cli, runner, [("Kumbalangi Nights", "loved"), ("Morbius", "hated")])
+    res = run(cli, runner, "dismiss", "Whiplash")
+    assert res.exit_code == 0
+    assert "dismissed" in res.output
+
+    engine = Engine()
+    with store.session(read_only=True) as con:
+        row = con.execute("SELECT item_id FROM titles WHERE title = 'Whiplash'").fetchone()
+        whiplash = int(row[0])
+        assert whiplash in store.interacted(con)
+        ids, rewards, _, weak = engine.labels(con)
+
+    position = list(ids).index(whiplash)
+    assert rewards[position] == SKIP_REWARD
+    assert weak[position]
+    # And it is not reported as a verdict.
+    assert "Whiplash" not in run(cli, runner, "history").output
+
+
+def test_dismissals_decay_like_everything_else(app_env):
+    cli, runner = app_env
+    from entertainer import store
+    from entertainer.engine import Engine
+
+    run(cli, runner, "dismiss", "Whiplash")
+    with store.session() as con:
+        con.execute("UPDATE events SET ts = ts - INTERVAL 800 DAY WHERE kind = 'dismiss'")
+    with store.session(read_only=True) as con:
+        ages = {i: a for i, a in store.negatives(con)}
+    assert ages and max(ages.values()) > 700
+    del Engine

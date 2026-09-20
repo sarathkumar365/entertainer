@@ -459,6 +459,24 @@ def seen(title: str) -> None:
 
 
 @app.command()
+def dismiss(title: str) -> None:
+    """Say you are not interested, without claiming to have watched it.
+
+    Distinct from a verdict: it removes the title from circulation and counts
+    as a mild negative at half weight, because declining to watch something is
+    real evidence about taste but much weaker than having watched it and
+    disliked it.
+    """
+    _require_catalog()
+    with store.session() as con:
+        match = _pick(con, title)
+        if not match:
+            raise typer.Exit(code=1)
+        store.log_event(con, match.item_id, "dismiss", None, "manual")
+        console.print(f"[dim]dismissed[/dim] — {match.label()}")
+
+
+@app.command()
 def bulk(
     path: Path = typer.Argument(..., help="Text file: one title per line, optional `| verdict`."),
     default_verdict: str = typer.Option("like", help="Verdict for lines with none given."),

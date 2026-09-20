@@ -267,6 +267,7 @@ ent similar "Jallikattu"             # pure geometry, ignores your profile
 ent loved 3                          # teach it, by slate position
 ent loved "Jallikattu"               # or by name
 ent disliked "Morbius"
+ent dismiss "Emily in Paris"         # not interested, never watched it
 ent bulk my_films.txt                # one title per line, optional `| verdict`
 ent add "Thaneer Mathan Dinangal"    # too obscure for the vote floor? fetch it anyway
 
