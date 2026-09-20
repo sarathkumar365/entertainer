@@ -1,0 +1,28 @@
+# secrets
+.env
+*.key
+
+# personal data — this repo is public, never push taste data
+data/
+profile/
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.npy
+*.npz
+*.faiss
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# models
+models_cache/
+*.safetensors
+*.gguf

@@ -1,0 +1,813 @@
+"""Command line interface.
+
+The whole interaction model is: type a title, say what you thought. Everything
+else the engine does is downstream of that. Commands are therefore named after
+what a person would say out loud — ``ent loved parasite`` — rather than after
+the machinery underneath.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from . import store
+from .config import PATHS, PRIORITY_LANGUAGES, has_tmdb
+from .engine import Engine, liked_titles
+from .resolve import Match, resolve_one, search
+
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="A personal, self-improving recommendation engine for film and television.",
+)
+data_app = typer.Typer(no_args_is_help=True, help="Build and maintain the catalogue.")
+app.add_typer(data_app, name="data")
+
+console = Console()
+
+
+# --- helpers ----------------------------------------------------------------
+
+
+def _fail(message: str) -> None:
+    console.print(f"[red]{message}[/red]")
+    raise typer.Exit(code=1)
+
+
+def _require_catalog() -> None:
+    if not PATHS.catalog_db.exists():
+        _fail("no catalogue yet — run `ent setup` first")
+
+
+def _pick(con, query: str, kind: str | None = None) -> Match | None:
+    """Resolve a typed title, asking the user only when genuinely ambiguous."""
+    match, alternatives = resolve_one(con, query, kind=kind)
+    if match:
+        return match
+    if not alternatives:
+        console.print(f"[yellow]nothing matching {query!r} in the catalogue[/yellow]")
+        return None
+
+    console.print(f"[bold]which one?[/bold] ({query!r})")
+    for i, alt in enumerate(alternatives, start=1):
+        console.print(f"  [cyan]{i}[/cyan]  {alt.label()}")
+    console.print("  [cyan]0[/cyan]  none of these")
+    try:
+        choice = typer.prompt("number", type=int, default=1)
+    except (typer.Abort, EOFError):
+        return None
+    if choice <= 0 or choice > len(alternatives):
+        return None
+    return alternatives[choice - 1]
+
+
+def _record(query: str, verdict: str, kind: str | None = None) -> None:
+    _require_catalog()
+    engine = Engine()
+    with store.session() as con:
+        match = _pick(con, query, kind=kind)
+        if not match:
+            raise typer.Exit(code=1)
+        engine.record(con, match.item_id, verdict)
+        console.print(f"[green]{verdict}[/green] — {match.label()}")
+        n = len(store.ratings(con))
+        if n in (3, 10, 25, 50, 100):
+            console.print(f"[dim]{n} verdicts recorded; model refits on every command[/dim]")
+
+
+# --- setup and data ---------------------------------------------------------
+
+
+@app.command()
+def setup(
+    skip_enrich: bool = typer.Option(False, help="Skip the TMDB enrichment pass."),
+    enrich_limit: int = typer.Option(0, help="Enrich only the N most-voted titles (0 = all)."),
+    vote_floor_scale: float = typer.Option(1.0, help="<1 widens the catalogue, >1 narrows it."),
+) -> None:
+    """Run the entire pipeline: download, build, enrich, embed, factorise, fuse."""
+    from .data import catalog, download
+
+    PATHS.ensure()
+    console.rule("[bold]1/6 downloading source data")
+    download.fetch_imdb()
+    download.fetch_movielens()
+
+    console.rule("[bold]2/6 building catalogue")
+    n = catalog.build_base(vote_floor_scale=vote_floor_scale)
+    console.print(f"[green]{n:,} titles[/green]")
+
+    if not skip_enrich and has_tmdb():
+        console.rule("[bold]3/6 enriching from TMDB")
+        data_enrich(limit=enrich_limit or None)
+    else:
+        console.rule("[bold]3/6 TMDB enrichment skipped")
+
+    console.rule("[bold]4/6 encoding item text")
+    data_embed()
+    console.rule("[bold]5/6 factorising MovieLens")
+    data_cf()
+    console.rule("[bold]6/6 fusing item space")
+    data_fuse()
+
+    console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
+
+
+@data_app.command("fetch")
+def data_fetch() -> None:
+    """Download the IMDb and MovieLens bulk datasets."""
+    from .data import download
+
+    download.fetch_imdb()
+    download.fetch_movielens()
+    console.print("[green]downloaded[/green]")
+
+
+@data_app.command("build")
+def data_build(vote_floor_scale: float = typer.Option(1.0)) -> None:
+    """Build the catalogue table from the bulk datasets."""
+    from .data import catalog
+
+    n = catalog.build_base(vote_floor_scale=vote_floor_scale)
+    console.print(f"[green]{n:,} titles[/green]")
+    table = Table("language", "titles")
+    for lang, count in catalog.language_histogram(20):
+        table.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{count:,}")
+    console.print(table)
+
+
+@data_app.command("enrich")
+def data_enrich(
+    limit: int | None = typer.Option(None, help="Only the N most-voted unenriched titles."),
+    concurrency: int = typer.Option(40),
+    keywords: bool = typer.Option(True, help="Fetch the keyword vocabulary (doubles requests)."),
+) -> None:
+    """Fill in synopses, keywords and languages from TMDB."""
+    from .data import catalog, tmdb
+
+    if not has_tmdb():
+        _fail("no TMDB credentials — put TMDB_BEARER or TMDB_API_KEY in .env")
+    pending = catalog.pending_enrichment(limit)
+    if not pending:
+        console.print("[green]nothing left to enrich[/green]")
+        return
+    console.print(f"[dim]{len(pending):,} titles to enrich[/dim]")
+
+    con = store.connect()
+    written = {"n": 0}
+
+    def flush(batch):
+        catalog.apply_enrichment(con, batch)
+        written["n"] += len(batch)
+
+    try:
+        tmdb.enrich(pending, concurrency=concurrency, keywords=keywords, on_batch=flush)
+    finally:
+        con.close()
+    console.print(f"[green]enriched {written['n']:,} titles[/green]")
+
+
+@data_app.command("embed")
+def data_embed(batch_size: int = typer.Option(64), limit: int | None = typer.Option(None)) -> None:
+    """Encode every item card with the multilingual text encoder."""
+    import numpy as np
+
+    from .models import encoder
+    from .models.itemcard import build_card
+
+    _require_catalog()
+    con = store.connect(read_only=True)
+    cur = con.execute(
+        "SELECT item_id, title, original_title, year, kind, language, runtime, genres, "
+        "keywords, directors, cast_names, overview, tagline FROM titles "
+        "ORDER BY item_id" + (f" LIMIT {int(limit)}" if limit else "")
+    )
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
+    con.close()
+    if not rows:
+        _fail("catalogue is empty")
+
+    ids = np.array([r["item_id"] for r in rows], dtype=np.int32)
+    cards = [build_card(r) for r in rows]
+    console.print(f"[dim]encoding {len(cards):,} item cards[/dim]")
+    console.print(Panel.fit(cards[0], title="example item card", border_style="dim"))
+
+    mat = encoder.encode_texts(cards, batch_size=batch_size)
+    encoder.save(ids, mat)
+    console.print(f"[green]embeddings: {mat.shape}[/green]")
+
+
+@data_app.command("cf")
+def data_cf(
+    factors: int = typer.Option(192),
+    iterations: int = typer.Option(20),
+    holdout: int = typer.Option(
+        2000, help="MovieLens users withheld from training, reserved for offline evaluation."
+    ),
+) -> None:
+    """Factorise the MovieLens co-consumption matrix."""
+    import numpy as np
+
+    from .models import cf
+
+    ratings = cf.load_ratings()
+    users = np.sort(ratings["userId"].unique().to_numpy())
+    rng = np.random.default_rng(0)
+    held = rng.choice(users, size=min(holdout, len(users)), replace=False) if holdout else None
+
+    ids, item_factors = cf.fit(factors=factors, iterations=iterations, holdout_users=held)
+    cf.save(ids, item_factors)
+    if held is not None:
+        np.save(PATHS.artifacts / "cf_holdout_users.npy", held.astype(np.int32))
+    console.print(f"[green]CF factors: {item_factors.shape}[/green]")
+
+
+@data_app.command("fuse")
+def data_fuse(dim: int = typer.Option(192)) -> None:
+    """Fuse the content and collaborative towers into one latent space."""
+    from .models import cf, encoder, fusion
+
+    if not encoder.exists():
+        _fail("no content embeddings — run `ent data embed`")
+    if not cf.exists():
+        _fail("no CF factors — run `ent data cf`")
+
+    ids, content = encoder.load()
+    cf_ids, cf_factors = cf.load()
+
+    con = store.connect(read_only=True)
+    ml = dict(
+        con.execute(
+            "SELECT item_id, movielens_id FROM titles WHERE movielens_id IS NOT NULL"
+        ).fetchall()
+    )
+    con.close()
+
+    art = fusion.build(ids, content, cf_ids, cf_factors, {int(k): int(v) for k, v in ml.items()}, dim=dim)
+    fusion.save(art)
+    console.print(
+        f"[green]fused space: {art.space.shape}[/green] "
+        f"(CF coverage {art.cf_coverage:.1%}, imputation R²={art.cf_r2:.3f})"
+    )
+
+
+# --- taste input ------------------------------------------------------------
+
+
+@app.command()
+def loved(title: str = typer.Argument(..., help="Title, optionally with a year.")) -> None:
+    """Record that you loved something."""
+    _record(title, "love")
+
+
+@app.command()
+def liked(title: str) -> None:
+    """Record that you liked something."""
+    _record(title, "like")
+
+
+@app.command()
+def meh(title: str) -> None:
+    """Record that something left you cold."""
+    _record(title, "meh")
+
+
+@app.command()
+def disliked(title: str) -> None:
+    """Record that you disliked something."""
+    _record(title, "dislike")
+
+
+@app.command()
+def hated(title: str) -> None:
+    """Record that you hated something."""
+    _record(title, "hate")
+
+
+@app.command()
+def seen(title: str) -> None:
+    """Mark something as already watched, with no opinion attached."""
+    _require_catalog()
+    with store.session() as con:
+        match = _pick(con, title)
+        if not match:
+            raise typer.Exit(code=1)
+        store.log_event(con, match.item_id, "seen", None, "manual")
+        console.print(f"[dim]noted as seen[/dim] — {match.label()}")
+
+
+@app.command()
+def bulk(
+    path: Path = typer.Argument(..., help="Text file: one title per line, optional `| verdict`."),
+    default_verdict: str = typer.Option("like", help="Verdict for lines with none given."),
+) -> None:
+    """Import many titles at once from a plain text file.
+
+    Lines look like `Kumbalangi Nights` or `Morbius | hate`. Unresolvable or
+    ambiguous titles are reported at the end rather than guessed at.
+    """
+    _require_catalog()
+    engine = Engine()
+    unresolved: list[str] = []
+    resolved = 0
+    with store.session() as con:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            verdict = default_verdict
+            if "|" in line:
+                line, verdict = (p.strip() for p in line.rsplit("|", 1))
+            match, alts = resolve_one(con, line)
+            if not match:
+                unresolved.append(f"{line}" + (f"  (closest: {alts[0].label()})" if alts else ""))
+                continue
+            engine.record(con, match.item_id, verdict, source="import")
+            resolved += 1
+    console.print(f"[green]recorded {resolved} verdicts[/green]")
+    if unresolved:
+        console.print(f"[yellow]{len(unresolved)} unresolved:[/yellow]")
+        for line in unresolved:
+            console.print(f"  {line}")
+
+
+@app.command()
+def find(query: str, limit: int = typer.Option(8)) -> None:
+    """Search the catalogue by title."""
+    _require_catalog()
+    with store.session(read_only=True) as con:
+        hits = search(con, query, limit=limit)
+    if not hits:
+        console.print("[yellow]no matches[/yellow]")
+        return
+    table = Table("title", "year", "lang", "kind", "IMDb", "votes")
+    for h in hits:
+        table.add_row(
+            h.title, str(h.year or ""), h.language or "", h.kind,
+            f"{h.imdb_rating:.1f}" if h.imdb_rating else "",
+            f"{h.imdb_votes:,}" if h.imdb_votes else "",
+        )
+    console.print(table)
+
+
+# --- onboarding -------------------------------------------------------------
+
+
+@app.command()
+def onboard(
+    questions: int = typer.Option(40, "--n", help="How many titles to ask about."),
+    languages: str = typer.Option("", help="Comma-separated language codes to focus on."),
+) -> None:
+    """Cold start: answer a short, adaptively chosen set of questions."""
+    import numpy as np
+
+    from .coldstart import elicit
+    from .models.taste import fit as fit_taste
+
+    _require_catalog()
+    engine = Engine()
+    langs = tuple(x.strip() for x in languages.split(",") if x.strip())
+
+    with store.session() as con:
+        fs = engine.features(con)
+        meta = engine.meta(con)
+        pool = elicit.recognisable_pool(fs, meta, langs)
+        if pool.size == 0:
+            _fail("no recognisable titles for those languages")
+
+        asked = store.interacted(con)
+        answered: list[tuple[int, float]] = []
+        console.print(
+            Panel.fit(
+                "[bold]l[/bold]oved   l[bold]i[/bold]ked   [bold]m[/bold]eh   "
+                "[bold]d[/bold]isliked   [bold]h[/bold]ated\n"
+                "[bold]n[/bold] = haven't seen it   [bold]q[/bold] = stop",
+                title="cold start",
+                border_style="cyan",
+            )
+        )
+        keymap = {
+            "l": "love", "i": "like", "m": "meh", "d": "dislike", "h": "hate",
+        }
+
+        batch = elicit.seed_questions(fs, meta, k=max(questions, 24), languages=langs, pool=pool)
+        batch = [b for b in batch if b not in asked]
+        cursor = 0
+        answered_count = 0
+
+        while answered_count < questions:
+            if cursor >= len(batch):
+                if len(answered) >= 3:
+                    ids = np.array([a[0] for a in answered])
+                    rewards = np.array([a[1] for a in answered])
+                    model = fit_taste(fs.vectors_for(ids), rewards, allow_rff=False)
+                    batch = elicit.next_questions(
+                        model, fs, meta, asked, k=16, languages=langs, pool=pool
+                    )
+                else:
+                    batch = [
+                        b
+                        for b in elicit.seed_questions(
+                            fs, meta, k=questions * 3, languages=langs, pool=pool
+                        )
+                        if b not in asked
+                    ]
+                cursor = 0
+                if not batch:
+                    break
+
+            item = batch[cursor]
+            cursor += 1
+            if item in asked:
+                continue
+            asked.add(item)
+            row = meta[item]
+            label = f"[bold]{row['title']}[/bold]"
+            if row.get("original_title") and row["original_title"] != row["title"]:
+                label += f" [dim]({row['original_title']})[/dim]"
+            tail = ", ".join(
+                str(x) for x in (row.get("year"), PRIORITY_LANGUAGES.get(row.get("language"), row.get("language")),
+                                 "series" if row.get("kind") == "tv" else None) if x
+            )
+            console.print(f"\n[cyan]{answered_count + 1}/{questions}[/cyan]  {label}  [dim]{tail}[/dim]")
+            try:
+                key = typer.prompt("", default="n", show_default=False).strip().lower()[:1]
+            except (typer.Abort, EOFError):
+                break
+            if key == "q":
+                break
+            if key not in keymap:
+                store.log_event(con, item, "seen", None, "elicit", {"answer": "unseen"})
+                continue
+            reward = engine.record(con, item, keymap[key], source="elicit")
+            answered.append((item, reward))
+            answered_count += 1
+
+        console.print(f"\n[green]{answered_count} verdicts recorded[/green]")
+        if answered_count >= 3:
+            engine.fit(con)
+            console.print("try [cyan]ent recs[/cyan] or [cyan]ent taste[/cyan]")
+
+
+# --- recommendations --------------------------------------------------------
+
+
+@app.command()
+def recs(
+    k: int = typer.Option(10, "-k", help="How many titles."),
+    language: str = typer.Option("", "--lang", help="Comma-separated language codes."),
+    movies: bool = typer.Option(False, "--movies", help="Films only."),
+    series: bool = typer.Option(False, "--series", help="Series only."),
+    since: int | None = typer.Option(None, help="Only titles released on or after this year."),
+    until: int | None = typer.Option(None, help="Only titles released on or before this year."),
+    max_runtime: int | None = typer.Option(None, help="Maximum runtime in minutes."),
+    strategy: str = typer.Option(
+        "thompson", help="thompson (explores) | mean (safest) | ucb (optimistic)."
+    ),
+    why: bool = typer.Option(True, help="Show which of your own titles each pick resembles."),
+) -> None:
+    """Recommend what to watch next."""
+    from .recommend import Filters, attach_reasons, recommend
+
+    _require_catalog()
+    engine = Engine()
+    with store.session() as con:
+        model = engine.model(con)
+        if model is None:
+            _fail("not enough verdicts yet — run `ent onboard`, or record at least three titles")
+
+        fs = engine.features(con)
+        meta = engine.meta(con)
+        filters = Filters(
+            languages=tuple(x.strip() for x in language.split(",") if x.strip()),
+            kind="movie" if movies else ("tv" if series else None),
+            min_year=since,
+            max_year=until,
+            max_runtime=max_runtime,
+            exclude=frozenset(store.interacted(con)),
+        )
+        picks = recommend(model, fs, meta, k=k, filters=filters, strategy=strategy)
+        if not picks:
+            _fail("no candidates survived those filters")
+
+        if why:
+            ids, labels = liked_titles(con, engine)
+            attach_reasons(picks, fs, ids, labels)
+
+        slate = store.new_slate_id()
+        store.log_impressions(
+            con,
+            slate,
+            [(p.item_id, p.position, p.score, p.propensity, p.explored) for p in picks],
+            policy=f"{strategy}-n{model.n_obs}",
+        )
+
+        full = store.item_rows(con, [p.item_id for p in picks])
+
+    console.print()
+    for p in picks:
+        row = full[p.item_id]
+        head = f"[bold]{row['title']}[/bold]"
+        if row.get("original_title") and row["original_title"] != row["title"]:
+            head += f" [dim]({row['original_title']})[/dim]"
+        facts = [str(row["year"])] if row.get("year") else []
+        if row.get("language"):
+            facts.append(PRIORITY_LANGUAGES.get(row["language"], row["language"]))
+        if row.get("kind") == "tv":
+            facts.append("series")
+        if row.get("runtime"):
+            facts.append(f"{row['runtime']}m")
+        if row.get("imdb_rating"):
+            facts.append(f"IMDb {row['imdb_rating']:.1f}")
+        marker = "[magenta]◇[/magenta]" if p.explored else "[green]◆[/green]"
+        console.print(f"{marker} {head}  [dim]{' · '.join(facts)}[/dim]")
+
+        genres = ", ".join((row.get("genres") or [])[:4])
+        if genres:
+            console.print(f"    [dim]{genres}[/dim]")
+        overview = (row.get("overview") or "").strip()
+        if overview:
+            console.print(f"    {overview[:190]}{'…' if len(overview) > 190 else ''}")
+        if p.reasons:
+            because = "; ".join(f"{name}" for name, _ in p.reasons)
+            console.print(f"    [dim]close to your: {because}[/dim]")
+        console.print(f"    [dim]predicted {p.mean * 10:.1f}/10 ± {p.std * 10:.1f}[/dim]\n")
+
+    console.print(
+        "[dim]◆ confident pick   ◇ exploratory pick[/dim]\n"
+        "[dim]tell it what happened: [/dim][cyan]ent loved \"<title>\"[/cyan]"
+    )
+
+
+@app.command()
+def why(title: str) -> None:
+    """Explain how a specific title scores against what the engine knows about you."""
+    from .models.discover import nearest_liked
+
+    _require_catalog()
+    engine = Engine()
+    with store.session() as con:
+        match = _pick(con, title)
+        if not match:
+            raise typer.Exit(code=1)
+        model = engine.model(con)
+        if model is None:
+            _fail("not enough verdicts yet")
+        fs = engine.features(con)
+        if match.item_id not in fs.index:
+            _fail("that title has no embedding — rebuild the item space")
+
+        vec = fs.matrix[fs.index[match.item_id]]
+        mean, std = model.predict(vec[None, :])
+        ids, labels = liked_titles(con, engine)
+        neighbours = []
+        if ids:
+            neighbours = nearest_liked(
+                fs.latent[fs.index[match.item_id]], fs.latent[fs.rows_for(ids)], labels, top=5
+            )
+
+    console.print(
+        Panel.fit(
+            f"[bold]{match.label()}[/bold]\n\n"
+            f"predicted  [bold]{mean[0] * 10:.1f}/10[/bold]  ± {std[0] * 10:.1f}\n"
+            f"the ± is the model's own uncertainty; a wide band means it is guessing",
+            border_style="cyan",
+        )
+    )
+    if neighbours:
+        console.print("[bold]closest to titles you rated well:[/bold]")
+        for name, sim in neighbours:
+            console.print(f"  [dim]{sim:+.2f}[/dim]  {name}")
+
+
+@app.command()
+def taste(axes: int = typer.Option(6, help="How many latent axes to describe.")) -> None:
+    """Show what the engine has worked out about your taste."""
+    from .models.discover import describe_axes
+    from .models.features import SIDE_FEATURE_NAMES
+    from .models.taste import taste_direction
+
+    _require_catalog()
+    engine = Engine()
+    with store.session() as con:
+        model = engine.model(con)
+        if model is None:
+            _fail("not enough verdicts yet — run `ent onboard`")
+        fs = engine.features(con)
+        meta = engine.meta(con)
+        found = describe_axes(model, fs.item_ids, fs.latent, meta, n_axes=axes)
+        ids, _ = engine.labels(con)
+
+    console.print(
+        Panel.fit(
+            f"learned from [bold]{model.n_obs}[/bold] verdicts · "
+            f"capacity: {'linear' if model.feature_map.n_rff == 0 else f'linear + {model.feature_map.n_rff} RFF'} "
+            f"(chosen by marginal likelihood, log Z = {model.log_evidence:.1f})",
+            border_style="dim",
+        )
+    )
+
+    if not found:
+        console.print("[yellow]not enough signal to describe the latent axes yet[/yellow]")
+    for ax in found:
+        console.print(f"\n[bold cyan]axis {ax.index}[/bold cyan]  [dim]influence {ax.strength:.3f}[/dim]")
+        console.print(f"  [green]towards[/green]  {', '.join(ax.liked_pole[:6]) or '—'}")
+        console.print(f"  [dim]e.g. {', '.join(ax.liked_examples)}[/dim]")
+        console.print(f"  [red]away from[/red]  {', '.join(ax.other_pole[:5]) or '—'}")
+        console.print(f"  [dim]e.g. {', '.join(ax.other_examples)}[/dim]")
+
+    direction = taste_direction(model)
+    side = direction[fs.n_latent :]
+    if side.size == len(SIDE_FEATURE_NAMES):
+        console.print("\n[bold]surface preferences[/bold] [dim](learned, not assumed)[/dim]")
+        for name, w in zip(SIDE_FEATURE_NAMES, side, strict=True):
+            lean = "prefers more" if w > 0 else "prefers less"
+            bar = "█" * min(20, int(abs(w) * 60))
+            console.print(f"  {name:>18}  [dim]{lean:>12}[/dim]  {bar} [dim]{w:+.3f}[/dim]")
+
+
+# --- introspection ----------------------------------------------------------
+
+
+@app.command()
+def stats() -> None:
+    """Show what exists and how much the engine knows."""
+    engine = Engine()
+    table = Table("component", "state")
+    for name, ok in engine.artifacts_present.items():
+        table.add_row(name.replace("_", " "), "[green]ready[/green]" if ok else "[red]missing[/red]")
+    table.add_row("tmdb credentials", "[green]set[/green]" if has_tmdb() else "[yellow]absent[/yellow]")
+    console.print(table)
+
+    if not PATHS.catalog_db.exists():
+        return
+    with store.session(read_only=True) as con:
+        c = store.counts(con)
+        langs = con.execute(
+            "SELECT language, count(*) n FROM titles GROUP BY 1 ORDER BY n DESC LIMIT 12"
+        ).fetchall()
+    t2 = Table("metric", "value")
+    for key, value in c.items():
+        t2.add_row(key, f"{value:,}")
+    console.print(t2)
+    t3 = Table("language", "titles")
+    for lang, n in langs:
+        t3.add_row(f"{lang} ({PRIORITY_LANGUAGES.get(lang, '?')})", f"{n:,}")
+    console.print(t3)
+
+
+@app.command()
+def history(limit: int = typer.Option(30)) -> None:
+    """List the verdicts you have given, most recent first."""
+    _require_catalog()
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT e.ts, t.title, t.year, t.language, e.value, e.context
+            FROM events e JOIN titles t USING (item_id)
+            WHERE e.kind = 'rate' ORDER BY e.ts DESC LIMIT ?
+            """,
+            [limit],
+        ).fetchall()
+    table = Table("when", "title", "year", "lang", "verdict")
+    for ts, title, year, lang, value, context in rows:
+        verdict = (json.loads(context) or {}).get("verdict", f"{value:.0f}")
+        table.add_row(str(ts)[:16], title, str(year or ""), lang or "", verdict)
+    console.print(table)
+
+
+@app.command("export")
+def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
+    """Export your verdicts so the catalogue can be rebuilt without losing them."""
+    _require_catalog()
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT t.imdb_id, t.title, t.year, e.kind, e.value, e.source, e.ts, e.context
+            FROM events e JOIN titles t USING (item_id) ORDER BY e.ts
+            """
+        ).fetchall()
+    with open(path, "w", encoding="utf-8") as fh:
+        for imdb_id, title, year, kind, value, source, ts, context in rows:
+            fh.write(
+                json.dumps(
+                    {
+                        "imdb_id": imdb_id, "title": title, "year": year, "kind": kind,
+                        "value": value, "source": source, "ts": str(ts),
+                        "context": json.loads(context or "{}"),
+                    }
+                )
+                + "\n"
+            )
+    console.print(f"[green]{len(rows):,} events -> {path}[/green]")
+
+
+@app.command("import")
+def import_profile(path: Path = typer.Argument(...)) -> None:
+    """Re-import an exported profile, matching on IMDb id."""
+    _require_catalog()
+    imported, missing = 0, 0
+    with store.session() as con:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            row = con.execute(
+                "SELECT item_id FROM titles WHERE imdb_id = ?", [rec["imdb_id"]]
+            ).fetchone()
+            if not row:
+                missing += 1
+                continue
+            store.log_event(
+                con, int(row[0]), rec["kind"], rec.get("value"),
+                rec.get("source", "import"), rec.get("context"),
+            )
+            imported += 1
+    console.print(f"[green]imported {imported:,}[/green]" + (f", [yellow]{missing} not in catalogue[/yellow]" if missing else ""))
+
+
+@app.command("eval")
+def evaluate(
+    users: int = typer.Option(300, help="How many held-out MovieLens users to replay."),
+    budget: int = typer.Option(30, help="Answered questions each simulated user gives."),
+    elicitation: str = typer.Option("active", help="active | random"),
+    out: Path | None = typer.Option(None, help="Write the full report as JSON."),
+) -> None:
+    """Benchmark the engine against baselines on held-out MovieLens users."""
+    from .evaluation.simulate import ARMS, SimConfig, load_user_histories, paired_bootstrap, run
+
+    _require_catalog()
+    engine = Engine()
+    with store.session(read_only=True) as con:
+        fs = engine.features(con)
+        meta = engine.meta(con)
+        ml_map = dict(
+            con.execute(
+                "SELECT movielens_id, item_id FROM titles WHERE movielens_id IS NOT NULL"
+            ).fetchall()
+        )
+
+    item_of_ml = {int(k): int(v) for k, v in ml_map.items() if int(v) in fs.index}
+    cfg = SimConfig(n_users=users, budget=budget)
+    histories = load_user_histories(item_of_ml, users, cfg.seed)
+    if not histories:
+        _fail("no usable MovieLens histories — is the catalogue too narrow?")
+    console.print(f"[dim]{len(histories)} simulated users, budget {budget} answers[/dim]")
+
+    results = run(fs, meta, histories, cfg, elicitation=elicitation)
+
+    table = Table("arm", "NDCG@10", "P@10", "MAP@10", "MRR@10", "novelty", "diversity", "serend.")
+    for name, res in results.items():
+        s = res.summary()
+        if not s:
+            continue
+        style = "bold green" if name == "entertainer" else ""
+        table.add_row(
+            f"[{style}]{name}[/{style}]" if style else name,
+            f"{s['ndcg@10']:.4f} ±{s['ndcg@10_se']:.4f}",
+            f"{s['precision@10']:.4f}",
+            f"{s['map@10']:.4f}",
+            f"{s['mrr@10']:.4f}",
+            f"{s['novelty']:.2f}",
+            f"{s['diversity']:.3f}",
+            f"{s['serendipity']:.3f}",
+        )
+    console.print(table)
+
+    if "entertainer" in results:
+        console.print("\n[bold]paired bootstrap vs each baseline (NDCG@10)[/bold]")
+        for name in ARMS:
+            if name == "entertainer" or name not in results:
+                continue
+            diff, p = paired_bootstrap(results["entertainer"], results[name])
+            verdict = "[green]significant[/green]" if p < 0.05 else "[yellow]not significant[/yellow]"
+            console.print(f"  vs {name:<18} Δ={diff:+.4f}  p={p:.4f}  {verdict}")
+
+    if out:
+        payload = {
+            "config": cfg.__dict__,
+            "n_users": len(histories),
+            "elicitation": elicitation,
+            "arms": {name: res.summary() for name, res in results.items()},
+        }
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        console.print(f"[green]report -> {out}[/green]")
+
+
+def main() -> None:  # pragma: no cover
+    try:
+        app()
+    except KeyboardInterrupt:
+        console.print("\n[dim]interrupted[/dim]")
+        sys.exit(130)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
