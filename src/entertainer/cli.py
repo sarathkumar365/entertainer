@@ -713,6 +713,10 @@ def recs(
     novelty: float = typer.Option(
         0.0, help="Push away from the canon. 0 = no penalty, 1 = strongly prefer the obscure."
     ),
+    mood: str = typer.Option(
+        "", help="Free text: 'slow-burn, quiet, no action'. Nudges the ranking, never overrides it."
+    ),
+    mood_weight: float = typer.Option(0.6, help="How hard the mood text pulls."),
     why: bool = typer.Option(True, help="Show which of your own titles each pick resembles."),
 ) -> None:
     """Recommend what to watch next."""
@@ -735,9 +739,19 @@ def recs(
             max_runtime=max_runtime,
             exclude=frozenset(store.interacted(con)),
         )
+        mood_vec = None
+        if mood.strip():
+            from .models import encoder, fusion
+
+            art = fusion.load()
+            if art.pca_mean is None:
+                _fail("this item space predates mood queries — run `ent data fuse` again")
+            console.print("[dim]loading the text encoder…[/dim]")
+            mood_vec = art.project(encoder.encode_query(mood)[None, :])[0]
+
         picks = recommend(
             model, fs, meta, k=k, filters=filters, strategy=strategy,
-            explore=explore, novelty=novelty,
+            explore=explore, novelty=novelty, mood=mood_vec, mood_weight=mood_weight,
         )
         if not picks:
             _fail("no candidates survived those filters")

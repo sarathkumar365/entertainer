@@ -159,6 +159,8 @@ def recommend(
     max_language_share: float = 0.5,
     explore: float = 1.0,
     novelty: float = 0.0,
+    mood: np.ndarray | None = None,
+    mood_weight: float = 0.6,
 ) -> list[Recommendation]:
     rng = rng or np.random.default_rng()
     filters = filters or Filters()
@@ -169,6 +171,7 @@ def recommend(
         return []
 
     X = fs.matrix[idx]
+    latent_all = fs.latent[idx]
     phi = model.feature_map(X)
 
     # Posterior mean is a single matrix-vector product, so it is affordable
@@ -186,6 +189,17 @@ def recommend(
     else:
         w = model.sample_weights(rng, 1, temperature=max(explore, 0.0))[0]
         scores = phi @ w + model.y_mean
+
+    if mood is not None and mood_weight > 0.0:
+        # A free-text mood is a second opinion, not an override. It is blended
+        # on a standardised scale so its influence is interpretable: at
+        # weight 1.0 a title one standard deviation more on-mood outranks one
+        # a standard deviation more to this person's taste. Filters stay hard;
+        # this is deliberately soft, because "something slow tonight" is a
+        # preference, not a constraint.
+        affinity = latent_all @ mood
+        affinity = (affinity - affinity.mean()) / (affinity.std() + 1e-9)
+        scores = scores + mood_weight * float(np.std(scores)) * affinity
 
     if novelty > 0.0:
         # Push away from the canon. Scored on log votes rather than a hard
@@ -218,8 +232,7 @@ def recommend(
     std_by_row = dict(zip(top.tolist(), std_top.tolist(), strict=True))
     order = top[np.argsort(-scores[top])]
 
-    latent = fs.latent[idx]
-    diversified = _mmr(order, scores, latent, k=k * 3, lambda_=mmr_lambda)
+    diversified = _mmr(order, scores, latent_all, k=k * 3, lambda_=mmr_lambda)
     final_rows = _language_quota(diversified, fs.item_ids[idx], meta, k, max_language_share)
 
     # First-order propensity under a softmax over the shortlist. The slate is

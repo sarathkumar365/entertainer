@@ -454,3 +454,43 @@ def test_projection_refuses_a_space_that_cannot_support_it():
     )
     with pytest.raises(RuntimeError, match="rebuild"):
         art.project(np.zeros((1, 2), dtype=np.float32))
+
+
+def test_mood_vector_nudges_ranking_without_overriding_taste(world):
+    """A mood is a second opinion, not a constraint."""
+    fs, meta, reward, cluster = world["fs"], world["meta"], world["reward"], world["cluster"]
+    rng = np.random.default_rng(13)
+    train = rng.choice(N_ITEMS, size=60, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+
+    # A "mood" pointing squarely at one of the clusters the user dislikes.
+    disliked = [i for i in range(N_ITEMS) if cluster[i] not in LIKED_CLUSTERS]
+    mood = fs.latent[fs.rows_for(disliked[:80])].mean(axis=0)
+    mood /= np.linalg.norm(mood)
+
+    def hit_rate(weight):
+        picks = recommend(
+            model, fs, meta, k=10, strategy="mean",
+            rng=np.random.default_rng(1), mood=mood, mood_weight=weight,
+        )
+        return np.mean([cluster[p.item_id] in LIKED_CLUSTERS for p in picks])
+
+    # With no mood the slate is the user's taste; a strong mood pulls it away.
+    assert hit_rate(0.0) > hit_rate(3.0)
+    # But a gentle mood must not flip the slate wholesale.
+    assert hit_rate(0.3) >= hit_rate(3.0)
+
+
+def test_mood_leaves_hard_filters_alone(world):
+    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    rng = np.random.default_rng(14)
+    train = rng.choice(N_ITEMS, size=40, replace=False)
+    model = fit(fs.vectors_for(train), reward[train])
+    mood = fs.latent[7]
+
+    picks = recommend(
+        model, fs, meta, k=8, strategy="mean", rng=np.random.default_rng(1),
+        filters=Filters(languages=("ml",)), mood=mood, mood_weight=5.0,
+    )
+    assert picks
+    assert all(meta[p.item_id]["language"] == "ml" for p in picks)

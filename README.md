@@ -243,6 +243,7 @@ ent recs --series --since 2020
 ent recs --strategy mean             # no exploration, safest picks
 ent recs --explore 2.5               # feeling adventurous
 ent recs --novelty 1.0               # push away from the canon
+ent recs --mood "slow, quiet, ambiguous ending, no action"
 ent similar "Jallikattu"             # pure geometry, ignores your profile
 
 ent loved 3                          # teach it, by slate position
@@ -270,6 +271,17 @@ possible later.
 ---
 
 ## Design notes
+
+**Why is the mood text a nudge rather than a filter?** Hard constraints —
+language, film versus series, runtime — are applied as filters, never as
+score penalties, because a constraint expressed as a penalty produces a slate
+that *mostly* obeys it, which is worse than useless when the constraint was
+the point. A mood is the opposite: "something slow tonight" is a preference,
+not a requirement, so it is blended on a standardised scale where weight 1.0
+means a title one standard deviation more on-mood outranks one a standard
+deviation more to your taste. The query text is embedded and projected into
+the same fused space through the stored imputation map, so it is compared
+against titles in exactly the geometry the model reasons in.
 
 **Why not a fine-tuned LLM or a generative recommender?** Semantic-ID methods
 like TIGER and HSTU are genuinely the state of the art — for platforms with
