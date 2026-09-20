@@ -80,7 +80,10 @@ def world():
     true_reward = np.where(np.isin(cluster, LIKED_CLUSTERS), 0.85, 0.2)
     true_reward = np.clip(true_reward + rng.normal(0, 0.05, N_ITEMS), 0, 1)
 
-    return dict(fs=fs, meta=meta, cluster=cluster, reward=true_reward, art=art)
+    return dict(
+        fs=fs, meta=meta, cluster=cluster, reward=true_reward, art=art,
+        content=content, covered=covered,
+    )
 
 
 def test_fusion_imputes_missing_collaborative_factors(world):
@@ -352,7 +355,7 @@ def test_shortlisted_variance_matches_the_exact_computation(world):
     """The fast path must agree with the slow one it replaced."""
     from entertainer.recommend import _predictive_std
 
-    fs, meta, reward = world["fs"], world["meta"], world["reward"]
+    fs, reward = world["fs"], world["reward"]
     rng = np.random.default_rng(6)
     train = rng.choice(N_ITEMS, size=200, replace=False)   # enough to trigger RFF
     model = fit(fs.vectors_for(train), reward[train])
@@ -397,3 +400,57 @@ def test_every_recommendation_carries_a_finite_uncertainty(world):
     assert picks
     assert all(np.isfinite(p.std) and p.std > 0 for p in picks)
     assert all(0.0 < p.propensity <= 1.0 for p in picks)
+
+
+def test_out_of_sample_projection_matches_the_in_sample_coordinates(world):
+    """A title projected after the fact must land where it would have during the build.
+
+    This is what lets the catalogue grow — a film too obscure to have made the
+    vote floor can be fetched, embedded and placed into the same space without
+    rebuilding anything. If the projection drifted, those titles would be
+    scored in a subtly different geometry from every other one.
+
+    Checked on the titles that had no genuine collaborative factors, since
+    those are the ones whose in-sample coordinates came purely through the
+    imputation path the projection has to reproduce.
+    """
+    art, content, covered = world["art"], world["content"], world["covered"]
+    uncovered = np.setdiff1d(np.arange(N_ITEMS), covered)
+    assert uncovered.size > 100
+
+    rng = np.random.default_rng(11)
+    sample = rng.choice(uncovered, size=40, replace=False)
+
+    projected = art.project(content[sample])
+    assert projected.shape == (40, art.space.shape[1])
+    cosines = np.einsum("ij,ij->i", projected, art.space[sample])
+    assert cosines.min() > 0.999, cosines.min()
+
+
+def test_projection_of_a_covered_title_is_close_but_not_identical(world):
+    """Titles MovieLens covered used their real factors, not the imputed ones.
+
+    The projection can only ever reproduce the imputed path, so it should land
+    near a covered title but not on it. Asserting this keeps anyone from
+    later assuming projection is exact for every title.
+    """
+    art, content, covered = world["art"], world["content"], world["covered"]
+    rng = np.random.default_rng(12)
+    sample = rng.choice(covered, size=40, replace=False)
+    cosines = np.einsum("ij,ij->i", art.project(content[sample]), art.space[sample])
+    assert 0.5 < float(np.mean(cosines)) < 0.999
+
+
+def test_projection_refuses_a_space_that_cannot_support_it():
+    from entertainer.models.fusion import FusionArtifacts
+
+    art = FusionArtifacts(
+        item_ids=np.arange(3, dtype=np.int32),
+        space=np.eye(3, dtype=np.float32),
+        components=np.eye(3, dtype=np.float32),
+        block_sizes=(2, 1),
+        cf_r2=0.5,
+        cf_coverage=1.0,
+    )
+    with pytest.raises(RuntimeError, match="rebuild"):
+        art.project(np.zeros((1, 2), dtype=np.float32))

@@ -407,6 +407,83 @@ def bulk(
 
 
 @app.command()
+def add(
+    title: str,
+    year: int | None = typer.Option(None, help="Disambiguate by release year."),
+    kind: str | None = typer.Option(None, help="movie | tv"),
+) -> None:
+    """Fetch a title TMDB knows but the catalogue does not, and place it in the space.
+
+    The catalogue has a vote floor, so genuinely obscure films are missing
+    from it. That should never stop someone teaching the engine about a film
+    they loved. The title is fetched, encoded, projected into the existing
+    fused space by the stored imputation map, and appended — no rebuild.
+    """
+    from .data import catalog, tmdb
+    from .models import encoder, fusion
+    from .models.itemcard import build_card
+
+    _require_catalog()
+    if not has_tmdb():
+        _fail("no TMDB credentials — put TMDB_BEARER or TMDB_API_KEY in .env")
+    if not fusion.exists():
+        _fail("no fused item space — run `ent setup` first")
+
+    with store.session(read_only=True) as con:
+        existing, _ = resolve_one(con, title, kind=kind)
+    if existing:
+        console.print(f"[yellow]already in the catalogue:[/yellow] {existing.label()}")
+        return
+
+    hits = tmdb.search(title, year=year, kind=kind)
+    if not hits:
+        _fail(f"TMDB has nothing matching {title!r}")
+
+    console.print(f"[bold]TMDB matches for[/bold] {title!r}")
+    for i, h in enumerate(hits[:8], start=1):
+        name = h.get("title") or h.get("name") or "?"
+        date = (h.get("release_date") or h.get("first_air_date") or "")[:4]
+        console.print(
+            f"  [cyan]{i}[/cyan]  {name} [dim]({date or '?'}, {h['_kind']}, "
+            f"{h.get('original_language')})[/dim]"
+        )
+    console.print("  [cyan]0[/cyan]  none of these")
+    try:
+        choice = typer.prompt("number", type=int, default=1)
+    except (typer.Abort, EOFError):
+        return
+    if choice <= 0 or choice > len(hits[:8]):
+        return
+    chosen = hits[choice - 1]
+
+    payload = tmdb.detail(int(chosen["id"]), chosen["_kind"])
+    if not payload:
+        _fail("could not fetch details from TMDB")
+    row = tmdb.detail_to_row(payload, chosen["_kind"])
+
+    art = fusion.load()
+    if art.pca_mean is None:
+        _fail("this fused space predates out-of-sample projection — run `ent data fuse` again")
+
+    card = build_card(row)
+    console.print(Panel.fit(card, title="item card", border_style="dim"))
+    content = encoder.encode_texts([card], show_progress=False)
+    latent = art.project(content)
+
+    with store.session() as con:
+        item_id = catalog.insert_title(con, row)
+
+    ids, mat = encoder.load()
+    encoder.save(np.append(ids, np.int32(item_id)), np.vstack([mat, content]))
+    art.item_ids = np.append(art.item_ids, np.int32(item_id))
+    art.space = np.vstack([art.space, latent])
+    fusion.save(art)
+
+    console.print(f"[green]added[/green] {row['title']} ({row.get('year')}) as item {item_id}")
+    console.print("[dim]rate it with[/dim] [cyan]ent loved \"" + str(row["title"]) + "\"[/cyan]")
+
+
+@app.command()
 def find(query: str, limit: int = typer.Option(8)) -> None:
     """Search the catalogue by title."""
     _require_catalog()

@@ -56,6 +56,37 @@ class FusionArtifacts:
     block_sizes: tuple[int, int]
     cf_r2: float                # cross-validated quality of the content->CF map
     cf_coverage: float          # fraction of items with genuine CF factors
+    # Everything below exists so a title that was never in the catalogue can
+    # be projected into the same space without rebuilding it. Without these
+    # the space is a closed world, and a user naming a film too obscure to
+    # have made the vote floor would simply be told no.
+    pca_mean: np.ndarray | None = None
+    ridge_coef: np.ndarray | None = None
+    ridge_intercept: np.ndarray | None = None
+
+    def project(self, content: np.ndarray) -> np.ndarray:
+        """Map raw content embeddings into the fused space, out of sample.
+
+        Mirrors ``build`` exactly: impute the collaborative block from
+        content, normalise each block, append the imputation-confidence
+        scalar, rotate by the stored PCA basis, renormalise. A new title has
+        no genuine collaborative factors by definition, so its confidence is
+        the map's cross-validated R^2 — the same value every imputed title in
+        the catalogue carries.
+        """
+        if self.pca_mean is None or self.ridge_coef is None:
+            raise RuntimeError("this fused space predates out-of-sample projection; rebuild it")
+
+        content = np.atleast_2d(np.asarray(content, dtype=np.float32))
+        cf = content @ self.ridge_coef.T + self.ridge_intercept
+
+        c_scaled = content / (np.linalg.norm(content, axis=1, keepdims=True) + 1e-9)
+        f_scaled = cf / (np.linalg.norm(cf, axis=1, keepdims=True) + 1e-9)
+        confidence = np.full((content.shape[0], 1), max(self.cf_r2, 0.0), dtype=np.float32)
+
+        joint = np.hstack([c_scaled, f_scaled, confidence]).astype(np.float32)
+        out = (joint - self.pca_mean) @ self.components.T
+        return (out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
 
 
 def _fit_cf_map(
@@ -150,6 +181,9 @@ def build(
         block_sizes=(content.shape[1], cf_dim),
         cf_r2=cf_r2,
         cf_coverage=coverage,
+        pca_mean=pca.mean_.astype(np.float32),
+        ridge_coef=np.asarray(ridge.coef_, dtype=np.float32),
+        ridge_intercept=np.asarray(ridge.intercept_, dtype=np.float32),
     )
 
 
@@ -163,11 +197,20 @@ def save(art: FusionArtifacts) -> None:
         block_sizes=np.array(art.block_sizes),
         cf_r2=np.array([art.cf_r2]),
         cf_coverage=np.array([art.cf_coverage]),
+        pca_mean=art.pca_mean if art.pca_mean is not None else np.zeros(0, dtype=np.float32),
+        ridge_coef=art.ridge_coef if art.ridge_coef is not None else np.zeros(0, dtype=np.float32),
+        ridge_intercept=(
+            art.ridge_intercept if art.ridge_intercept is not None else np.zeros(0, dtype=np.float32)
+        ),
     )
 
 
 def load() -> FusionArtifacts:
     z = np.load(PATHS.embeddings / "fused.npz")
+
+    def optional(key: str):
+        return z[key] if key in z.files and z[key].size else None
+
     return FusionArtifacts(
         item_ids=z["item_ids"],
         space=z["space"],
@@ -175,6 +218,9 @@ def load() -> FusionArtifacts:
         block_sizes=tuple(int(x) for x in z["block_sizes"]),
         cf_r2=float(z["cf_r2"][0]),
         cf_coverage=float(z["cf_coverage"][0]),
+        pca_mean=optional("pca_mean"),
+        ridge_coef=optional("ridge_coef"),
+        ridge_intercept=optional("ridge_intercept"),
     )
 
 

@@ -1,0 +1,25 @@
+# Seed your taste profile in one go:  ent bulk seed.example.txt
+#
+# One title per line. Add a verdict after a pipe, or leave it off to use
+# --default-verdict (which itself defaults to "like").
+#
+#   love | like | meh | dislike | hate
+#
+# A year in brackets disambiguates remakes. Original-language titles work too.
+# Anything unresolvable is reported at the end rather than guessed at — and if
+# a film is missing because it fell below the catalogue's vote floor, fetch it
+# with:  ent add "<title>"
+
+Kumbalangi Nights           | love
+Jallikattu                  | like
+Drishyam (2013)             | love
+Memories of Murder          | love
+Parasite (2019)             | like
+Whiplash                    | love
+The Godfather               | like
+Morbius                     | hate
+Transformers: Revenge of the Fallen | hate
+
+# Series work the same way.
+Breaking Bad                | love
+Dark (2017)                 | like

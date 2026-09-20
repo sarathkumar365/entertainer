@@ -215,6 +215,7 @@ ent similar "Jallikattu"             # pure geometry, ignores your profile
 ent loved "Jallikattu"               # teach it, by name
 ent disliked "Morbius"
 ent bulk my_films.txt                # one title per line, optional `| verdict`
+ent add "Thaneer Mathan Dinangal"    # too obscure for the vote floor? fetch it anyway
 
 ent taste                            # what it worked out about you
 ent why "Memories of Murder"         # why it thinks you'd like this
