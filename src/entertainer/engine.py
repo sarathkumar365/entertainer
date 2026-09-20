@@ -24,6 +24,10 @@ from .models import fusion
 from .models.features import FeatureSpace, build as build_features
 from .models.taste import TasteModel, fit as fit_taste, verdict_to_reward
 
+# Roughly three years. Long enough that a full history still counts, short
+# enough that a decisive shift in taste is reflected within a season or two.
+HALF_LIFE_DAYS = 1100.0
+
 # Columns needed for filtering, scoring and axis naming. The synopsis is
 # deliberately excluded: it is only needed for the handful of titles actually
 # displayed, and loading 300k of them costs hundreds of megabytes for nothing.
@@ -65,31 +69,58 @@ class Engine:
 
     # --- labels ------------------------------------------------------------
 
-    def labels(self, con) -> tuple[np.ndarray, np.ndarray]:
-        """Return (item_ids, rewards) from the event log, latest verdict wins."""
-        rows = store.ratings(con)
+    def labels(self, con) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return (item_ids, rewards, ages_in_days) from the event log.
+
+        Latest verdict per title wins, so changing your mind about something
+        simply overwrites the old opinion rather than averaging with it.
+        """
         fs = self.features(con)
-        ids, rewards = [], []
-        for item_id, value in rows:
+        rows = con.execute(
+            """
+            SELECT item_id, value, date_diff('day', ts, now()) AS age FROM (
+                SELECT item_id, value, ts,
+                       row_number() OVER (PARTITION BY item_id ORDER BY ts DESC) rn
+                FROM events WHERE kind = 'rate' AND value IS NOT NULL
+            ) WHERE rn = 1
+            """
+        ).fetchall()
+        ids, rewards, ages = [], [], []
+        for item_id, value, age in rows:
             if int(item_id) in fs.index:
                 ids.append(int(item_id))
                 rewards.append(float(value) / 10.0)
+                ages.append(float(age or 0))
         # Explicit skips are weak negatives: the user declined to engage, which
         # is informative but far less so than saying they disliked it.
         for item_id in store.negatives(con):
             if int(item_id) in fs.index:
                 ids.append(int(item_id))
                 rewards.append(0.25)
-        return np.array(ids, dtype=np.int64), np.array(rewards, dtype=np.float64)
+                ages.append(0.0)
+        return (
+            np.array(ids, dtype=np.int64),
+            np.array(rewards, dtype=np.float64),
+            np.array(ages, dtype=np.float64),
+        )
 
-    def fit(self, con, save: bool = True) -> TasteModel | None:
-        ids, rewards = self.labels(con)
+    def fit(self, con, save: bool = True, half_life_days: float = HALF_LIFE_DAYS) -> TasteModel | None:
+        ids, rewards, ages = self.labels(con)
         if ids.size < 3:
             return None
         fs = self.features(con)
         X = fs.vectors_for(ids)
+
         # Skips carry half the weight of a stated verdict.
         weights = np.where(np.isclose(rewards, 0.25), 0.5, 1.0)
+        # Taste drifts. Old verdicts still count, but a film you loved four
+        # years ago is weaker evidence about what you want tonight than one
+        # you loved last month. The half-life is deliberately long: this is a
+        # gentle tilt towards the present, not a forgetting mechanism.
+        if half_life_days > 0:
+            weights = weights * np.exp(-np.log(2.0) * ages / half_life_days)
+        weights = np.maximum(weights, 1e-3)
+
         model = fit_taste(X, rewards, sample_weight=weights)
         if save:
             model.to_npz()
@@ -124,7 +155,7 @@ class Engine:
 
 def liked_titles(con, engine: Engine, min_reward: float = 0.7, limit: int = 60):
     """The user's own positives, for use in explanations."""
-    ids, rewards = engine.labels(con)
+    ids, rewards, _ = engine.labels(con)
     if ids.size == 0:
         return [], []
     order = np.argsort(-rewards)

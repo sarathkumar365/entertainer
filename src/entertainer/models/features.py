@@ -37,6 +37,7 @@ class FeatureSpace:
     latent: np.ndarray       # (N, D) fused PCA space, unit rows
     side: np.ndarray         # (N, E) standardised side features
     index: dict[int, int]    # item_id -> row
+    _matrix: np.ndarray | None = None
 
     @property
     def n_latent(self) -> int:
@@ -44,7 +45,18 @@ class FeatureSpace:
 
     @property
     def matrix(self) -> np.ndarray:
-        return np.hstack([self.latent, self.side]).astype(np.float32)
+        """Latent and side features concatenated, built once and reused.
+
+        At catalogue scale this array is a couple of hundred megabytes, and
+        scoring, elicitation and evaluation all touch it repeatedly within a
+        single command. Rebuilding it per access was the difference between a
+        recommendation taking half a second and taking ten.
+        """
+        if self._matrix is None:
+            object.__setattr__(
+                self, "_matrix", np.hstack([self.latent, self.side]).astype(np.float32)
+            )
+        return self._matrix
 
     def rows_for(self, item_ids) -> np.ndarray:
         return np.array([self.index[int(i)] for i in item_ids], dtype=np.int64)

@@ -12,6 +12,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -629,6 +630,78 @@ def why(title: str) -> None:
 
 
 @app.command()
+def similar(
+    title: str,
+    k: int = typer.Option(10, "-k"),
+    language: str = typer.Option("", "--lang"),
+    same_language: bool = typer.Option(False, help="Restrict to the title's own language."),
+) -> None:
+    """Find titles closest to a given one in the learned latent space.
+
+    Pure geometry — this ignores your taste model entirely, so it answers
+    "what is like this" rather than "what would you enjoy". Useful when you
+    know exactly what mood you are in.
+    """
+    _require_catalog()
+    engine = Engine()
+    with store.session(read_only=True) as con:
+        match = _pick(con, title)
+        if not match:
+            raise typer.Exit(code=1)
+        fs = engine.features(con)
+        meta = engine.meta(con)
+        if match.item_id not in fs.index:
+            _fail("that title has no embedding — rebuild the item space")
+
+        langs = tuple(x.strip() for x in language.split(",") if x.strip())
+        if same_language and match.language:
+            langs = (match.language,)
+
+        sims = fs.latent @ fs.latent[fs.index[match.item_id]]
+        order = np.argsort(-sims)
+        picked = []
+        for row in order:
+            iid = int(fs.item_ids[row])
+            if iid == match.item_id:
+                continue
+            r = meta.get(iid)
+            if not r or (langs and r.get("language") not in langs):
+                continue
+            picked.append((iid, float(sims[row])))
+            if len(picked) == k:
+                break
+        rows = store.item_rows(con, [p[0] for p in picked])
+
+    console.print(f"[dim]closest to[/dim] [bold]{match.label()}[/bold]\n")
+    table = Table("similarity", "title", "year", "lang", "IMDb")
+    for iid, sim in picked:
+        r = rows[iid]
+        table.add_row(
+            f"{sim:.3f}", r["title"], str(r.get("year") or ""),
+            r.get("language") or "", f"{r['imdb_rating']:.1f}" if r.get("imdb_rating") else "",
+        )
+    console.print(table)
+
+
+@app.command()
+def forget(title: str) -> None:
+    """Remove every verdict you have given a title, as if it were never rated."""
+    _require_catalog()
+    with store.session() as con:
+        match = _pick(con, title)
+        if not match:
+            raise typer.Exit(code=1)
+        n = con.execute(
+            "SELECT count(*) FROM events WHERE item_id = ?", [match.item_id]
+        ).fetchone()[0]
+        if not n:
+            console.print(f"[yellow]nothing recorded for {match.label()}[/yellow]")
+            return
+        con.execute("DELETE FROM events WHERE item_id = ?", [match.item_id])
+    console.print(f"[green]forgot {n} event(s)[/green] — {match.label()}")
+
+
+@app.command()
 def taste(axes: int = typer.Option(6, help="How many latent axes to describe.")) -> None:
     """Show what the engine has worked out about your taste."""
     from .models.discover import describe_axes
@@ -644,7 +717,6 @@ def taste(axes: int = typer.Option(6, help="How many latent axes to describe."))
         fs = engine.features(con)
         meta = engine.meta(con)
         found = describe_axes(model, fs.item_ids, fs.latent, meta, n_axes=axes)
-        ids, _ = engine.labels(con)
 
     console.print(
         Panel.fit(

@@ -278,13 +278,19 @@ def fit(
     if n == 0:
         raise ValueError("no labelled examples")
 
-    if sample_weight is not None:
+    if sample_weight is None:
+        sqrt_w = np.ones(n, dtype=np.float64)
+    else:
         w = np.asarray(sample_weight, dtype=np.float64).ravel()
         w = w / w.mean()
-        X = X * np.sqrt(w)[:, None]
-        y = y * np.sqrt(w)
+        sqrt_w = np.sqrt(w)
 
-    y_mean = float(y.mean())
+    # Centre on the weighted mean, and apply the weights to the *design
+    # matrix* rather than to X, so that the intercept column the feature map
+    # adds is weighted along with everything else. Scaling X alone leaves the
+    # intercept unweighted, which quietly biases the fit whenever weak
+    # negatives (skips) are mixed with stated verdicts.
+    y_mean = float(np.average(y, weights=sqrt_w**2))
     yc = y - y_mean
 
     candidates: list[tuple[int, float]] = [(0, 1.0)]
@@ -298,8 +304,8 @@ def fit(
         # the evidence computation gets numerically fragile past ~8x.
         if fm.out_dim > max(8 * n, 64) and n_rff:
             continue
-        phi = fm(X)
-        mean, cov, alpha, beta, ev = _evidence_fit(phi, yc)
+        phi = fm(X) * sqrt_w[:, None]
+        mean, cov, alpha, beta, ev = _evidence_fit(phi, yc * sqrt_w)
         model = TasteModel(
             feature_map=fm, mean=mean, cov=cov, alpha=alpha, beta=beta,
             n_obs=n, y_mean=y_mean, log_evidence=ev,
