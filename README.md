@@ -55,17 +55,35 @@ TMDB API       ─┘               │                                        �
 
 **IMDb bulk exports** form the spine: complete, free, and — the reason they
 were chosen over TMDB as the base — they carry small-industry cinema with the
-same fidelity as Hollywood. A vote threshold tuned for American films would
-erase most of the Malayalam catalogue, so the floor is **per-language**: 200
-votes on a Malayalam film is a comparable cultural footprint to 2,000 on an
-English one.
+same fidelity as Hollywood.
 
-**TMDB** then enriches each title with a synopsis, a curated keyword
-vocabulary, and an authoritative `original_language`. The synopsis matters
-most — it is the only place where pace, tone and moral posture are written
-down at all.
+**TMDB** enriches each title with a synopsis, a curated keyword vocabulary,
+and an authoritative `original_language`. The synopsis matters most: it is
+the only place where pace, tone and moral posture are written down at all.
 
 **MovieLens-32M** contributes 32 million ratings of co-consumption behaviour.
+
+A vote threshold tuned for American films would erase most of the Malayalam
+catalogue, so the floor is **per-language**: 200 votes on a Malayalam film is
+a comparable cultural footprint to 2,000 on an English one.
+
+Applying that floor requires knowing the language, and getting this wrong was
+the most instructive failure in the project. IMDb's `akas` table has a
+`language` column, which looks like exactly the right field and is not: it
+records the language of a *localised release*, not of the film. Kantara, a
+Kannada film, carries tags for English, French, Hindi, Japanese and Turkish
+and none for Kannada. Baahubali carries Tamil, Telugu, Hindi and English with
+nothing marking which is the original.
+
+The resulting failure was silent and biased in one direction — every
+non-English film with a US or UK release picked up an `en` tag, was then
+measured against the English vote floor, and vanished. The catalogue came out
+79% English with zero Tamil, Malayalam or Telugu titles, and looked entirely
+plausible.
+
+So the build now applies a flat floor and **declines to guess** a language.
+Pruning happens afterwards, once TMDB has supplied one it can be trusted:
+272,403 candidates in, language-aware floors applied after enrichment.
 
 ### 2. The item space
 
