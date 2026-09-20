@@ -1171,6 +1171,63 @@ def audit(
         "[dim]every prediction above was made by a model that had not seen that verdict[/dim]"
     )
 
+    _off_policy_report(engine, fs)
+
+
+def _off_policy_report(engine: Engine, fs) -> None:
+    """Estimate what today's model would have scored on yesterday's slates.
+
+    Every slate records the probability each title had of being shown, which
+    is what makes this possible at all: the verdicts on record were collected
+    under an older, worse model, and comparing them directly to anything is
+    apples to oranges. Importance weighting corrects for that.
+
+    Reported separately from the prequential numbers and hedged, because it
+    genuinely is the weaker measurement — the estimator is high-variance on a
+    few hundred samples even self-normalised, and it assumes the candidate set
+    has not shifted underneath it.
+    """
+    from .evaluation.prequential import snips
+
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT i.item_id, i.propensity, e.value / 10.0 AS reward
+            FROM impressions i
+            JOIN events e ON e.item_id = i.item_id
+            WHERE e.kind = 'rate' AND e.value IS NOT NULL AND e.ts >= i.ts
+            """
+        ).fetchall()
+        model = engine.model(con)
+
+    usable = [(float(r), float(p), 0.0) for _, p, r in rows if p and p > 0]
+    if len(usable) < 30 or model is None:
+        console.print(
+            f"\n[dim]off-policy check: {len(usable)} logged recommendations with an outcome; "
+            "needs 30 before the estimate means anything[/dim]"
+        )
+        return
+
+    item_ids = [int(i) for i, p, _ in rows if p and p > 0]
+    known = [i for i in item_ids if i in fs.index]
+    if len(known) != len(item_ids):
+        console.print("\n[dim]off-policy check skipped: the item space has changed[/dim]")
+        return
+
+    scores = model.predict(fs.vectors_for(item_ids), with_std=False)
+    estimate = snips(usable, list(scores))
+    logged_value = float(np.mean([r for r, _, _ in usable]))
+    if estimate is None:
+        return
+
+    verdict = "[green]better[/green]" if estimate > logged_value else "[yellow]no better[/yellow]"
+    console.print(
+        f"\n[bold]off-policy estimate[/bold] [dim](weaker evidence; indicative only)[/dim]\n"
+        f"  slates actually shown scored  {logged_value * 10:.2f}/10\n"
+        f"  today's model would have      {estimate * 10:.2f}/10   {verdict}\n"
+        f"  [dim]over {len(usable)} logged recommendations you later rated[/dim]"
+    )
+
 
 @app.command("eval")
 def evaluate(

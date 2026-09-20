@@ -138,6 +138,15 @@ each one, and predicts it blind. Reports:
 Needs at least eight verdicts before it will say anything, and says so
 otherwise.
 
+`ent audit` also reports an off-policy estimate: what today's model would
+have scored on the slates an older, worse model actually showed you. This is
+possible only because every slate records the probability each title had of
+being shown; without that, comparing verdicts collected under different
+models is apples to oranges. It is reported separately and hedged, because it
+genuinely is the weaker measurement — self-normalised importance weighting is
+still high-variance on a few hundred samples, and it assumes the candidate set
+has not shifted underneath it.
+
 ---
 
 ## 5. Results

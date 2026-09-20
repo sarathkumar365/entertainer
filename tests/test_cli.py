@@ -510,3 +510,27 @@ def test_stats_says_what_to_run_next(app_env):
     ])
     warmed = run(cli, runner, "stats")
     assert "ent recs" in warmed.output
+
+
+def test_audit_reports_the_learning_curve_once_there_is_history(app_env):
+    cli, runner = app_env
+    # Years included because two films share the title "Drishyam".
+    titles = [f"{t[1]} ({t[3]})" for t in TITLES] + [f"Filler ML {j}" for j in range(6)]
+    verdicts = ["loved", "liked", "meh", "disliked", "hated"]
+    teach(cli, runner, [(t, verdicts[i % 5]) for i, t in enumerate(titles[:14])])
+
+    res = run(cli, runner, "audit")
+    assert res.exit_code == 0, res.output
+    assert "mean absolute error" in res.output
+    assert "running-average baseline" in res.output
+    assert "interval coverage" in res.output
+
+
+def test_audit_says_when_there_is_too_little_logged_feedback(app_env):
+    cli, runner = app_env
+    titles = [f"{t[1]} ({t[3]})" for t in TITLES][:12]
+    teach(cli, runner, [(t, "loved" if i % 2 else "hated") for i, t in enumerate(titles)])
+    res = run(cli, runner, "audit")
+    assert res.exit_code == 0, res.output
+    assert "off-policy check" in res.output
+    assert "needs 30" in res.output
