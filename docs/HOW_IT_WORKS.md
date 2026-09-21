@@ -6,20 +6,12 @@ and it makes its best next suggestions while being honest about uncertainty.
 
 ## The short version
 
-```text
-You rate a film
-       |
-       v
-The app saves one local event in DuckDB
-       |
-       v
-The model compares that film with the catalogue's film descriptions
-       |
-       v
-It updates its best guess of your taste
-       |
-       v
-It ranks unseen films and shows recommendations with confidence
+```mermaid
+flowchart TD
+    rate[You rate a film] --> event[App saves a local DuckDB event]
+    event --> compare[Model compares the film with the catalogue]
+    compare --> fit[Update the current taste estimate]
+    fit --> rank[Rank unseen titles with confidence]
 ```
 
 The saved rating history is the source of truth. The model can always be
@@ -33,25 +25,24 @@ shared film map, and a **fast personal loop** that learns from your ratings.
 The factory runs occasionally; the personal loop runs whenever you rate or ask
 for recommendations.
 
-```text
-                         CATALOGUE FACTORY (occasional, local build)
+```mermaid
+flowchart LR
+    imdb[IMDb] --> catalogue[Catalogue builder]
+    tmdb[TMDB] --> catalogue
+    catalogue --> cards[Item cards]
+    cards --> embeddings[Text embeddings]
+    movieLens[MovieLens] --> als[iALS collaboration]
+    embeddings --> fused[Fused film map]
+    als --> fused
+    als --> population[Population prior]
 
- IMDb -----------\
- TMDB ------------> [Catalogue builder] --> [Item cards] --> [Text embeddings] --\
- MovieLens -------/          |                    |                  |            \
-                              |                    |                  |             > [Fused film map]
-                              |                    |                  |            /
-                              +--> local DuckDB <--+        [iALS collaboration] -/
-                                     catalogue                         |
-                                                               [Population prior]
-
-                         PERSONAL LOOP (fast, for one person)
-
- [Feedback web app] --> [Local event log] --> [Bayesian taste fit] --> [Ranker] --> recommendations
-        ^                    |                     ^                    |
-        |                    +--> rated view        |                    +--> saved slate/impression
-        |                                          fused film map
-        +-------------------- next rating / sealed validation verdict ---+
+    web[Feedback web app] --> events[Local event log]
+    events --> taste[Bayesian taste fit]
+    fused --> taste
+    population --> taste
+    taste --> ranker[Ranker]
+    ranker --> slate[Recommendations]
+    slate --> events
 ```
 
 | Component | Why it is needed | How it is implemented | It hands off to |
@@ -75,11 +66,14 @@ can save ratings, show rated titles, and avoid showing them again. But it
 cannot make full personalized recommendations until the catalogue factory has
 created the embeddings and fused film map.
 
-```text
-Ratings alone                         -> saved history, but no full recommender
-Catalogue + embeddings + fusion       -> titles can be compared
-Fused map + at least 3 ratings        -> a personal score and uncertainty
-Sealed outcomes (30 / 100)            -> preliminary / simplification evidence
+```mermaid
+flowchart TD
+    ratings[Ratings alone] --> history[Saved history only]
+    catalogue[Catalogue plus embeddings plus fusion] --> comparable[Titles can be compared]
+    comparable --> minimum[At least 3 ratings]
+    minimum --> prediction[Personal score and uncertainty]
+    prediction --> sealed[Sealed outcomes]
+    sealed --> evidence[30: preliminary; 100: keep full model or simplify]
 ```
 
 This separation is intentional. Your personal data remains small and local,
@@ -108,15 +102,14 @@ Otherwise the model learns from the film as a whole.
 
 ## Where the catalogue comes from
 
-```text
-IMDb bulk data ------> titles, years, people, vote counts
-                             |
-TMDB public API ------> synopsis, poster, original language, keywords
-                             |
-MovieLens-32M --------> patterns in how viewers connected titles
-                             |
-                             v
-                    one local catalogue
+```mermaid
+flowchart LR
+    imdb[IMDb bulk data] --> base[Titles, years, people, vote counts]
+    tmdb[TMDB public API] --> enrich[Synopsis, poster, language, keywords]
+    movieLens[MovieLens-32M] --> patterns[Audience connection patterns]
+    base --> catalogue[Local catalogue]
+    enrich --> catalogue
+    patterns --> catalogue
 ```
 
 | Source | What it adds | Why it is used |
@@ -137,19 +130,13 @@ Computers cannot compare a plot summary directly. They need a list of numbers
 called an **embedding**. A helpful mental model is a map: films with similar
 meaning appear near each other.
 
-```text
-Film card: title + synopsis + cast + language + keywords
-                         |
-                         v
-Multilingual text encoder
-                         |
-                         v
-Content fingerprint (meaning and style)
-
-MovieLens rating patterns --> collaborative fingerprint (audience behaviour)
-                         |
-                         v
-Fused fingerprint for each film
+```mermaid
+flowchart TD
+    card[Film card: title, synopsis, cast, language, keywords] --> encoder[Multilingual text encoder]
+    encoder --> content[Content fingerprint: meaning and style]
+    ratings[MovieLens rating patterns] --> collaborative[Collaborative fingerprint: audience behaviour]
+    content --> fused[Fused fingerprint for each film]
+    collaborative --> fused
 ```
 
 The project uses a multilingual Qwen embedding model because the catalogue is
@@ -184,10 +171,11 @@ numeric reward `y` (the verdict mapped onto a 0–1 scale). It learns weights
 unless the ratings contain clear evidence for a direction. The Bayesian form
 keeps a distribution over `w`, rather than only one best vector:
 
-```text
-posterior mean       -> expected score
-posterior covariance -> uncertainty in that score
-noise precision      -> irreducible variation in human ratings
+```mermaid
+flowchart LR
+    posterior[Bayesian posterior] --> mean[Posterior mean: expected score]
+    posterior --> covariance[Posterior covariance: score uncertainty]
+    posterior --> noise[Noise precision: irreducible rating variation]
 ```
 
 The current feature pipeline uses a 256-dimensional multilingual content
@@ -207,16 +195,14 @@ with a plain ridge model on exactly the same personal validation cases. If the
 complex model cannot prove it is better after 100 completed blind cases, the
 application should simplify back to ridge.
 
-```text
-Your saved ratings + film fingerprints
-                 |
-                 v
-Bayesian model learns a personal taste direction
-                 |
-                 +--> predicted score (0–10)
-                 +--> chance that you will like it
-                 +--> uncertainty range
-                 +--> recommendation ranking
+```mermaid
+flowchart LR
+    ratings[Saved ratings] --> model[Bayesian personal model]
+    fingerprints[Film fingerprints] --> model
+    model --> score[Predicted score: 0 to 10]
+    model --> likelihood[Chance you will like it]
+    model --> uncertainty[Uncertainty range]
+    model --> ranking[Recommendation ranking]
 ```
 
 “Like” means a `love` or `like` verdict. Score prediction is kept separately
@@ -246,17 +232,17 @@ propensity (its chance of being shown), which is needed for later analysis.
 `ent setup` runs these stages locally. It is resumable: completed downloads
 and artifacts are reused rather than restarted.
 
-```text
-1. Check disk space and credentials
-2. Download IMDb and MovieLens public data
-3. Build the base catalogue; preserve ratings by stable IMDb ID
-4. Enrich titles from TMDB
-5. Apply language-aware pruning
-6. Create multilingual content embeddings
-7. Learn MovieLens collaborative factors with held-out test users excluded
-8. Fuse the two item spaces
-9. Fit the optional population prior
-10. Write an immutable manifest of inputs, settings, and checksums
+```mermaid
+flowchart TD
+    preflight[1. Check disk and credentials] --> download[2. Download IMDb and MovieLens]
+    download --> catalogue[3. Build catalogue and preserve ratings by IMDb ID]
+    catalogue --> enrich[4. Enrich from TMDB]
+    enrich --> prune[5. Apply language-aware pruning]
+    prune --> encode[6. Create multilingual embeddings]
+    encode --> cf[7. Learn MovieLens collaborative factors]
+    cf --> fuse[8. Fuse item spaces]
+    fuse --> prior[9. Fit population prior]
+    prior --> manifest[10. Write immutable build manifest]
 ```
 
 The first full build is intentionally slow because it processes a large public
@@ -288,17 +274,11 @@ You add films you have already watched but have not rated. Before any verdict
 is revealed, the app seals predictions and rankings from both the full model
 and ridge baseline. Only then do you reveal what you thought.
 
-```text
-Choose watched, unrated titles
-                |
-                v
-Seal both models' predictions and rankings
-                |
-                v
-Reveal your verdicts one by one
-                |
-                v
-Compare the saved predictions with reality
+```mermaid
+flowchart TD
+    pool[Choose watched, unrated titles] --> seal[Seal both models' predictions and rankings]
+    seal --> reveal[Reveal verdicts one by one]
+    reveal --> compare[Compare saved predictions with reality]
 ```
 
 Sealed predictions cannot change after seeing the answer. “Not seen” remains
