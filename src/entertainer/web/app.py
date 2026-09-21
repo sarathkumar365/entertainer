@@ -29,42 +29,17 @@ from ..config import has_tmdb, language_label
 from ..engine import Engine
 from ..models.taste import VERDICTS
 from ..resolve import search as resolve_search
+from .catalogue import create_router as create_catalogue_router
 from .feed import DEFAULT_WEIGHTS, FeedRequest, fetch
+from .library import create_router as create_library_router
+from .presentation import poster as _poster
+from .presentation import present as _present
+from .recommendations import create_router as create_recommendations_router
 
 STATIC = Path(__file__).parent / "static"
-POSTER_BASE = "https://image.tmdb.org/t/p/w342"
-
 # Below this many titles, assume the catalogue was never built rather than
 # built small.
 EMPTY_CATALOGUE = 25
-
-
-def _poster(path: str | None) -> str | None:
-    return f"{POSTER_BASE}{path}" if path else None
-
-
-def _present(row: dict) -> dict:
-    """Shape a catalogue row for the interface."""
-    return {
-        "item_id": row.get("item_id"),
-        "title": row.get("title"),
-        "original_title": (
-            row.get("original_title")
-            if row.get("original_title") and row.get("original_title") != row.get("title")
-            else None
-        ),
-        "year": row.get("year"),
-        "kind": row.get("kind"),
-        "language": row.get("language"),
-        "language_name": language_label(row.get("language")),
-        "runtime": row.get("runtime"),
-        "genres": list(row.get("genres") or [])[:3],
-        "directors": list(row.get("directors") or [])[:2],
-        "rating": row.get("imdb_rating"),
-        "votes": row.get("imdb_votes"),
-        "overview": (row.get("overview") or "")[:260] or None,
-        "poster": _poster(row.get("poster_path")),
-    }
 
 
 class Verdict(BaseModel):
@@ -259,10 +234,15 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     @app.post("/api/rate")
     def rate(body: Verdict) -> dict[str, Any]:
         with store.session(read_only=True) as con:
+            exists = con.execute(
+                "SELECT 1 FROM titles WHERE item_id = ?", [body.item_id]
+            ).fetchone()
             sealed = con.execute(
                 "SELECT 1 FROM validation_cases WHERE item_id = ? AND status = 'sealed'",
                 [body.item_id],
             ).fetchone()
+        if not exists:
+            raise HTTPException(404, "unknown catalogue title")
         if sealed:
             raise HTTPException(400, "this title is a sealed validation case; reveal it through validation")
         if body.verdict == "unseen":
@@ -279,8 +259,9 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     def undo() -> dict[str, Any]:
         with store.session() as con:
             row = con.execute(
-                "SELECT event_id, item_id FROM events WHERE source = 'web' "
-                "ORDER BY ts DESC LIMIT 1"
+                "SELECT event_id, item_id FROM events "
+                "WHERE source = 'web' AND kind IN ('rate', 'unseen') "
+                "ORDER BY ts DESC, event_id DESC LIMIT 1"
             ).fetchone()
             if not row:
                 return {"ok": False}
@@ -393,36 +374,6 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
-    @app.post("/api/recommendations/slate")
-    def recommendation_slate(k: int = 10) -> dict[str, Any]:
-        """Create and log an observational production slate with propensities."""
-        from ..recommend import Filters, recommend
-
-        with store.session() as con:
-            # Recommendations are derived from the event log on every call;
-            # do not persist a transient model merely to create a slate.
-            model = engine.fit(con, save=False)
-            if model is None:
-                raise HTTPException(409, "at least three explicit verdicts are needed before recommendations")
-            fs = engine.features(con)
-            meta = engine.meta(con)
-            slate_id = store.new_slate_id()
-            recs = recommend(
-                model, fs, meta, k=max(1, min(k, 20)), strategy="thompson",
-                filters=Filters(exclude=frozenset(store.interacted(con))),
-            )
-            store.log_impressions(
-                con, slate_id,
-                [(r.item_id, r.position, r.score, r.propensity, r.explored) for r in recs],
-                policy="bayesian-thompson-v1",
-            )
-        return {
-            "slate_id": slate_id,
-            "observational": True,
-            "items": [{**_present(meta[r.item_id]), "score": r.mean * 10.0, "std": r.std * 10.0,
-                       "propensity": r.propensity, "explored": r.explored} for r in recs],
-        }
-
     @app.get("/api/search")
     def search(q: str, limit: int = 12) -> dict[str, Any]:
         """Catalogue first, then TMDB for anything the catalogue lacks."""
@@ -525,5 +476,8 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
             rows = store.item_rows(con, [item_id])
         return {"ok": True, "item": _present(rows[item_id])}
 
+    app.include_router(create_catalogue_router())
+    app.include_router(create_library_router())
+    app.include_router(create_recommendations_router(engine))
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

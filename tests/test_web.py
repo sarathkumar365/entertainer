@@ -87,8 +87,10 @@ def client(tmp_path, monkeypatch):
 def test_index_serves(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert "function escapeHtml" in r.text
-    assert "function posterUrl" in r.text
+    assert "taste system" in r.text
+    assert "/static/app.js" in r.text
+    assert "prefers-reduced-motion" in client.get("/static/app.css").text
+    assert "/api/check-titles" in client.get("/static/app.js").text
     assert "entertainer" in r.text
 
 
@@ -172,6 +174,19 @@ def test_undo_reverses_the_last_verdict(client):
     assert client.get("/api/progress").json()["rated"] == 0
 
 
+def test_undo_never_reverses_a_library_action(client):
+    items = client.get("/api/feed?years=4&limit=4").json()["items"]
+    rated, saved = items[:2]
+    client.post("/api/rate", json={"item_id": rated["item_id"], "verdict": "like"})
+    client.post("/api/library/actions", json={"item_id": saved["item_id"], "action": "save"})
+
+    undone = client.post("/api/undo").json()
+    assert undone["ok"] and undone["item_id"] == rated["item_id"]
+    assert saved["item_id"] in {
+        item["item_id"] for item in client.get("/api/library").json()["saved"]
+    }
+
+
 def test_undo_on_an_empty_log_is_harmless(client):
     assert client.post("/api/undo").json()["ok"] is False
 
@@ -179,6 +194,11 @@ def test_undo_on_an_empty_log_is_harmless(client):
 def test_unknown_verdict_is_rejected(client):
     r = client.post("/api/rate", json={"item_id": 0, "verdict": "brilliant"})
     assert r.status_code == 400
+
+
+def test_rating_unknown_title_is_rejected(client):
+    r = client.post("/api/rate", json={"item_id": 999_999, "verdict": "like"})
+    assert r.status_code == 404
 
 
 def test_search_finds_catalogue_titles(client):
@@ -219,6 +239,53 @@ def test_rated_view_returns_latest_saved_verdict(client):
     saved = client.get("/api/rated").json()["items"]
     assert saved[0]["item_id"] == item["item_id"]
     assert saved[0]["verdict"] == "love"
+
+
+def test_library_actions_are_reversible_and_not_training_labels(client):
+    from entertainer import store
+
+    items = client.get("/api/feed?years=4&limit=10").json()["items"]
+    target = items[0]
+    assert client.post("/api/library/actions", json={"item_id": target["item_id"], "action": "save"}).json()["ok"]
+    library = client.get("/api/library").json()
+    assert target["item_id"] in {item["item_id"] for item in library["saved"]}
+    with store.session(read_only=True) as con:
+        assert target["item_id"] not in {item_id for item_id, _value in store.ratings(con)}
+
+    assert client.post("/api/library/actions", json={"item_id": target["item_id"], "action": "remove"}).json()["ok"]
+    assert target["item_id"] not in {item["item_id"] for item in client.get("/api/library").json()["saved"]}
+
+    assert client.post("/api/library/actions", json={"item_id": target["item_id"], "action": "watched"}).json()["ok"]
+    library = client.get("/api/library").json()
+    assert target["item_id"] in {item["item_id"] for item in library["watched"]}
+    with store.session(read_only=True) as con:
+        assert target["item_id"] not in {item_id for item_id, _value in store.ratings(con)}
+
+
+def test_saved_title_is_excluded_from_typed_recommendation_slate(client):
+    items = client.get("/api/feed?years=4&limit=12").json()["items"]
+    for item in items[:3]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+    saved = items[3]
+    client.post("/api/library/actions", json={"item_id": saved["item_id"], "action": "save"})
+
+    slate = client.post("/api/recommendations/slate", json={"k": 10, "kind": "movie"})
+    assert slate.status_code == 200
+    assert slate.json()["kind"] == "movie"
+    assert saved["item_id"] not in {item["item_id"] for item in slate.json()["items"]}
+    assert all(item["kind"] == "movie" for item in slate.json()["items"])
+
+
+def test_check_titles_returns_bounded_local_candidates(client):
+    result = client.post("/api/check-titles", json={"titles": ["ML Film 3"]})
+    assert result.status_code == 200
+    row = result.json()["results"][0]
+    assert row["query"] == "ML Film 3"
+    assert row["catalogue"]
+    assert row["catalogue"][0]["item_id"] is not None
+
+    too_many = client.post("/api/check-titles", json={"titles": [str(i) for i in range(21)]})
+    assert too_many.status_code == 422
 
 
 def test_invalid_bearer_falls_back_to_api_key(monkeypatch):
