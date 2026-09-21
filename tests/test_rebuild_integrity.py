@@ -10,7 +10,6 @@ verdict to a different film.
 from __future__ import annotations
 
 import gzip
-from pathlib import Path
 
 import pytest
 
