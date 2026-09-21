@@ -625,7 +625,7 @@ def test_a_compressed_reward_band_still_produces_a_usable_model(world):
     """
     from entertainer.engine import NEGATIVE_REWARD, NEGATIVE_WEIGHT
 
-    fs, reward, cluster = world["fs"], world["reward"], world["cluster"]
+    fs, cluster = world["fs"], world["cluster"]
     rng = np.random.default_rng(31)
 
     # Only titles the viewer liked, rated in a tight band — the real shape.
