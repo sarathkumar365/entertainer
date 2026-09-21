@@ -30,9 +30,14 @@ encode = [
     "sentence-transformers>=3.3",
     "transformers>=4.47",
 ]
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
 dev = [
     "pytest>=8.3",
     "ruff>=0.8",
+    "httpx>=0.28",
 ]
 
 [project.scripts]
@@ -60,3 +65,7 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:fastapi.*",
+]

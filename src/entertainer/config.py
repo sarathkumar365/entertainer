@@ -13,7 +13,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Skipped when ENTERTAINER_NO_DOTENV is set. Without this, deleting the TMDB
+# variables in a test is not enough — .env is re-read and the suite makes
+# live API calls with real credentials, which is both slow and a way to leak
+# a key into a CI log.
+if not os.environ.get("ENTERTAINER_NO_DOTENV"):
+    load_dotenv()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

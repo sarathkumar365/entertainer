@@ -1039,6 +1039,50 @@ def _next_step(present: dict[str, bool], n_ratings: int) -> str:
 
 
 @app.command()
+def rate(
+    port: int = typer.Option(8756, help="Port to serve on."),
+    host: str = typer.Option("127.0.0.1", help="Bind address. Localhost by design."),
+    open_browser: bool = typer.Option(True, "--open/--no-open"),
+) -> None:
+    """Open the rating interface — a grid of posters you click through.
+
+    The engine learns from verdicts and nothing else, so how fast you can give
+    verdicts is the rate-limiting step in making it good. Recognising a poster
+    is far quicker than recalling and typing a transliterated title, and the
+    friction compounds over the hundred-odd ratings the model needs.
+
+    Everything written here goes into the same event log the CLI uses, so
+    `ent recs`, `ent taste` and `ent audit` see it immediately.
+    """
+    _require_catalog()
+    try:
+        import uvicorn
+    except ImportError:
+        _fail("install the web extra: uv pip install -e '.[web]'")
+
+    from .web.app import create_app
+
+    url = f"http://{host}:{port}"
+    console.print(
+        Panel.fit(
+            f"[bold]{url}[/bold]\n\n"
+            "[bold]♥[/bold] loved   [bold]+[/bold] liked   [bold]~[/bold] fine   "
+            "[bold]−[/bold] disliked   [bold]?[/bold] not seen\n"
+            "search finds anything TMDB knows, even outside the catalogue\n\n"
+            "[dim]ctrl-c to stop · nothing leaves this machine[/dim]",
+            title="rate what you have seen",
+            border_style="cyan",
+        )
+    )
+    if open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+
+
+@app.command()
 def stats() -> None:
     """Show what exists, how much the engine knows, and what to run next."""
     engine = Engine()

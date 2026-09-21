@@ -251,10 +251,35 @@ ent setup                # download, build, enrich, embed, factorise, fuse
 
 ---
 
+## Teaching it, quickly
+
+```bash
+ent rate
+```
+
+Opens a local page of posters: recent titles that were well received *in
+their own industry*, balanced across languages, with five buttons each —
+loved, liked, fine, disliked, haven't seen. Click through them.
+
+The engine learns from verdicts and nothing else, so how fast you can give
+verdicts is the rate-limiting step in making it good. Recognising a poster is
+much quicker than recalling and typing a transliterated title, and the
+friction compounds over the hundred-odd ratings the model actually needs.
+
+Language mix is adjustable by clicking the chips; the defaults lean towards
+Malayalam, Tamil and English and keep Telugu deliberately quiet. The search
+box finds anything in the catalogue *and* anything TMDB knows that is not —
+searching `പ്രേമലു` returns Premalu even though the catalogue has no
+Malayalam-script index. Rating a title from that second group pulls it in,
+encodes it and places it in the item space, with no rebuild.
+
+Nothing leaves the machine but TMDB metadata requests.
+
 ## Use
 
 ```bash
-ent onboard --n 40                   # cold start, adaptively chosen questions
+ent rate                             # poster grid at localhost — the fast way to teach it
+ent onboard --n 40                   # or cold start in the terminal
 ent recs                             # what to watch
 ent recs --lang ml,ta --movies -k 15
 ent recs --series --since 2020
