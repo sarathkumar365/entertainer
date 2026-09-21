@@ -26,6 +26,66 @@ The saved rating history is the source of truth. The model can always be
 rebuilt from it, so it cannot quietly forget a rating or learn from a hidden
 copy of your data.
 
+## System map: the parts and their hand-offs
+
+There are two connected systems: a **slow catalogue factory** that builds the
+shared film map, and a **fast personal loop** that learns from your ratings.
+The factory runs occasionally; the personal loop runs whenever you rate or ask
+for recommendations.
+
+```text
+                         CATALOGUE FACTORY (occasional, local build)
+
+ IMDb -----------\
+ TMDB ------------> [Catalogue builder] --> [Item cards] --> [Text embeddings] --\
+ MovieLens -------/          |                    |                  |            \
+                              |                    |                  |             > [Fused film map]
+                              |                    |                  |            /
+                              +--> local DuckDB <--+        [iALS collaboration] -/
+                                     catalogue                         |
+                                                               [Population prior]
+
+                         PERSONAL LOOP (fast, for one person)
+
+ [Feedback web app] --> [Local event log] --> [Bayesian taste fit] --> [Ranker] --> recommendations
+        ^                    |                     ^                    |
+        |                    +--> rated view        |                    +--> saved slate/impression
+        |                                          fused film map
+        +-------------------- next rating / sealed validation verdict ---+
+```
+
+| Component | Why it is needed | How it is implemented | It hands off to |
+| --- | --- | --- | --- |
+| Feedback web app | Lets you give quick, low-friction verdicts and see what was saved | FastAPI backend with a small local HTML/JS interface | Local event log |
+| Event log | Preserves the complete history; a rating is never only an in-memory click | DuckDB `events` table; latest explicit verdict per title is used when fitting | Personal model and exports |
+| Catalogue builder | Gives every film a stable identity and usable metadata | Polars reads IMDb TSV files; DuckDB stores the resulting title table | Item cards and search/feed |
+| TMDB enrichment | Supplies detail IMDb lacks, especially synopsis and original language | Async HTTP client, batched and resumable; results stored beside each title | Language pruning and item cards |
+| Item cards / embeddings | Turns human-readable film information into comparable numbers | A multilingual Qwen encoder converts one compact text card per title into vectors | Fused film map |
+| Collaborative filtering | Captures audience relationships that summaries do not say explicitly | iALS factorises the MovieLens user–title matrix; held-out users are excluded | Fused film map and population prior |
+| Fused film map | Provides one common coordinate system for every title | Content and collaborative vectors are combined, confidence-aware, then reduced with PCA | Personal model, similar-title search, ranker |
+| Bayesian taste fit | Learns what *you* tend to like while measuring uncertainty | Closed-form Bayesian ridge regression, optionally with an evidence-selected non-linear lift | Ranker, score/confidence display |
+| Ranker | Produces a useful top-ten rather than ten clones | Filters candidates, scores them, adds measured exploration, diversifies with MMR, logs propensities | Recommendation slate |
+| Sealed validation | Checks personal performance without changing a prediction after the fact | Saves both full-model and ridge predictions before your verdict is revealed | Immutable evidence reports |
+| Manifests and reports | Make results auditable and comparable over time | JSON records with hashes, settings, seeds, split IDs, and timestamps | Dashboard/export |
+
+### What depends on what
+
+The feedback app can run in a lightweight live mode with only TMDB access. It
+can save ratings, show rated titles, and avoid showing them again. But it
+cannot make full personalized recommendations until the catalogue factory has
+created the embeddings and fused film map.
+
+```text
+Ratings alone                         -> saved history, but no full recommender
+Catalogue + embeddings + fusion       -> titles can be compared
+Fused map + at least 3 ratings        -> a personal score and uncertainty
+Sealed outcomes (30 / 100)            -> preliminary / simplification evidence
+```
+
+This separation is intentional. Your personal data remains small and local,
+while the expensive public-data work can be rebuilt, moved as a bundle, or
+replaced without rewriting what you watched and how you rated it.
+
 ## A story: you rate a film
 
 Imagine you rate *Kumbalangi Nights* as **love**.
