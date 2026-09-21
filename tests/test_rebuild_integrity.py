@@ -144,3 +144,52 @@ def test_pruning_still_removes_unrated_obscurities(catalogued):
     remaining = {r[0] for r in con.execute("SELECT imdb_id FROM titles").fetchall()}
     con.close()
     assert "tt08" not in remaining
+
+
+def test_hand_added_titles_survive_pruning(catalogued):
+    """`ent add` titles have no IMDb vote count; a vote floor cannot judge them."""
+    con = store.connect()
+    catalog.insert_title(
+        con,
+        {
+            "imdb_id": "tt99999",
+            "tmdb_id": 424242,
+            "kind": "movie",
+            "title": "Thaneer Mathan Dinangal",
+            "year": 2019,
+            "language": "ml",
+            "tmdb_rating": 7.6,
+            "tmdb_votes": 120,
+            "overview": "School days in Kerala.",
+        },
+    )
+    con.close()
+
+    catalog.recalibrate_quality(min_titles=1)
+    catalog.prune_by_language()
+
+    con = store.connect(read_only=True)
+    row = con.execute(
+        "SELECT quality FROM titles WHERE imdb_id = 'tt99999'"
+    ).fetchone()
+    con.close()
+    assert row is not None, "a hand-added title was pruned for lacking IMDb votes"
+    # And its TMDB rating was used rather than defaulting to average.
+    assert row[0] != pytest.approx(0.5), row[0]
+
+
+def test_titles_with_no_rating_anywhere_get_a_neutral_quality(catalogued):
+    con = store.connect()
+    catalog.insert_title(
+        con,
+        {"imdb_id": "tt99998", "tmdb_id": 1, "kind": "movie", "title": "Unknown Quantity"},
+    )
+    con.close()
+    catalog.recalibrate_quality(min_titles=1)
+
+    con = store.connect(read_only=True)
+    quality = con.execute(
+        "SELECT quality FROM titles WHERE imdb_id = 'tt99998'"
+    ).fetchone()[0]
+    con.close()
+    assert quality == pytest.approx(0.5)
