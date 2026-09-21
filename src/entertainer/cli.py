@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import store
+from .build_events import Reporter
 from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
 from .manifests import write as write_manifest
@@ -144,36 +145,53 @@ def setup(
     from .data import catalog, download
 
     info = pipeline_preflight()
+    reporter = Reporter(settings={
+        "skip_enrich": skip_enrich,
+        "enrich_limit": enrich_limit,
+        "min_votes": min_votes,
+        "floor_scale": floor_scale,
+        "free_bytes": info["free_bytes"],
+    })
     console.print(f"[dim]preflight passed: {info['free_bytes'] / 1024**3:.1f} GiB free[/dim]")
     console.rule("[bold]1/8 downloading source data")
-    download.fetch_imdb()
-    download.fetch_movielens()
+    with reporter.stage("sources"):
+        download.fetch_imdb()
+        download.fetch_movielens()
 
     console.rule("[bold]2/8 building catalogue")
-    n = catalog.build_base(min_votes=min_votes)
+    with reporter.stage("catalogue"):
+        n = catalog.build_base(min_votes=min_votes)
     console.print(f"[green]{n:,} titles[/green]")
 
     if not skip_enrich and has_tmdb():
         console.rule("[bold]3/8 enriching from TMDB")
-        data_enrich(limit=enrich_limit or None, concurrency=40, keywords=False)
-        data_keywords(top=150_000, concurrency=40)
+        with reporter.stage("tmdb"):
+            data_enrich(limit=enrich_limit or None, concurrency=40, keywords=False)
+            data_keywords(top=150_000, concurrency=40)
     else:
         console.rule("[bold]3/8 TMDB enrichment skipped")
+        reporter.skip("tmdb", "disabled by --skip-enrich or no TMDB credentials")
 
     console.rule("[bold]4/8 pruning by language")
-    data_prune(scale=floor_scale, dry_run=False)
+    with reporter.stage("prune"):
+        data_prune(scale=floor_scale, dry_run=False)
     console.rule("[bold]5/8 encoding item text")
-    data_embed(batch_size=64, limit=None, fresh=False)
+    with reporter.stage("embeddings"):
+        data_embed(batch_size=64, limit=None, fresh=False)
     console.rule("[bold]6/8 factorising MovieLens")
-    data_cf(factors=192, iterations=20, holdout=2_000, signal="watched")
+    with reporter.stage("cf"):
+        data_cf(factors=192, iterations=20, holdout=2_000, signal="watched")
     console.rule("[bold]7/8 fusing item space")
-    data_fuse(dim=192)
+    with reporter.stage("fusion"):
+        data_fuse(dim=192)
     console.rule("[bold]8/8 learning the population prior")
-    data_prior(max_users=20_000, shrinkage=0.15)
+    with reporter.stage("prior"):
+        data_prior(max_users=20_000, shrinkage=0.15)
 
     with store.session(read_only=True) as con:
         counts = store.counts(con)
     manifest = write_manifest("build", {"counts": counts, "min_votes": min_votes, "floor_scale": floor_scale})
+    reporter.complete(manifest["id"])
     console.print(f"[dim]build manifest: {manifest['path']}[/dim]")
 
     console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
@@ -1160,6 +1178,32 @@ def rate(
         create_app(token=token or None, live=use_live),
         host=host, port=port, log_level="warning",
     )
+
+
+@app.command()
+def studio(
+    port: int = typer.Option(8757, help="Port to serve on."),
+    open_browser: bool = typer.Option(True, "--open/--no-open"),
+) -> None:
+    """Open the read-only Build Studio, then run ``ent setup`` separately."""
+    try:
+        import uvicorn
+    except ImportError:
+        _fail("install the web extra: uv pip install -e '.[web]'")
+    from .web.studio import create_studio_app
+
+    url = f"http://127.0.0.1:{port}"
+    console.print(Panel.fit(
+        f"[bold]{url}[/bold]\n\nOpen this page, then run [cyan]ent setup[/cyan] in another terminal.\n"
+        "[dim]Studio observes saved local build progress; it cannot alter the build.[/dim]",
+        title="Build Studio", border_style="cyan",
+    ))
+    if open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_studio_app(), host="127.0.0.1", port=port, log_level="warning")
 
 
 @app.command()
