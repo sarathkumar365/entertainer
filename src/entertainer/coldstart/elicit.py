@@ -45,10 +45,20 @@ from ..config import PRIORITY_LANGUAGES
 from ..models.features import FeatureSpace
 from ..models.taste import TasteModel
 
-# Recognisability floors, as a fraction of the most-voted title in that
-# language. Relative rather than absolute, because vote counts differ by two
-# orders of magnitude across industries.
+# Recognisability floors, as a quantile within each language. Relative rather
+# than absolute, because vote counts differ by two orders of magnitude across
+# industries.
 RECOGNISABILITY_QUANTILE = 0.90
+
+# But a quantile alone is not enough for a small catalogue. Ten per cent of a
+# 200-title Kannada catalogue is twenty films — too thin to build a question
+# ladder from, and thin enough that a user who happens not to have seen those
+# twenty gets asked nothing about Kannada cinema at all. Each language keeps
+# at least this many candidates where it has them.
+MIN_POOL_PER_LANGUAGE = 60
+
+# Below this a language has too few titles to treat as its own stratum.
+MIN_TITLES_PER_LANGUAGE = 12
 
 
 def recognisable_pool(
@@ -75,14 +85,18 @@ def recognisable_pool(
 
     keep: list[int] = []
     for lang, entries in by_lang.items():
-        if len(entries) < 12:
+        if len(entries) < MIN_TITLES_PER_LANGUAGE:
             continue
+        entries.sort(key=lambda e: -e[0])
         votes = np.array([e[0] for e in entries])
         floor = float(np.quantile(votes, quantile))
         picked = [row for v, row in entries if v >= floor]
+        # Top up small catalogues: better to ask about a moderately known
+        # Kannada film than about no Kannada film.
+        if len(picked) < MIN_POOL_PER_LANGUAGE:
+            picked = [row for _, row in entries[:MIN_POOL_PER_LANGUAGE]]
         # Languages the user named get more room in the question budget.
         cap = per_language_cap or (1200 if lang in PRIORITY_LANGUAGES else 400)
-        picked.sort(key=lambda row: -(meta[int(fs.item_ids[row])].get("imdb_votes") or 0))
         keep.extend(picked[:cap])
     return np.array(sorted(set(keep)), dtype=np.int64)
 

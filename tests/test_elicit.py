@@ -83,3 +83,61 @@ def test_seed_questions_do_not_collapse_onto_one_language():
     counts = Counter(meta[p]["language"] for p in picks)
     assert counts["en"] <= 8, counts
     assert len(counts) >= 3, counts
+
+
+def test_small_language_catalogues_keep_a_usable_question_pool():
+    """Ten per cent of 200 Kannada films is twenty — too thin to question from."""
+    from entertainer.coldstart.elicit import MIN_POOL_PER_LANGUAGE, recognisable_pool
+
+    fs = _space(n=1400, d=16, seed=5)
+    rng = np.random.default_rng(6)
+    meta = {}
+    for i in fs.item_ids.tolist():
+        # 1200 English titles, 200 Kannada.
+        lang = "en" if i < 1200 else "kn"
+        meta[int(i)] = {
+            "language": lang,
+            "imdb_votes": int(rng.integers(1_000, 900_000)),
+            "quality": 0.6,
+        }
+    pool = recognisable_pool(fs, meta, quantile=0.90)
+    by_lang: dict[str, int] = {}
+    for row in pool.tolist():
+        by_lang[meta[int(fs.item_ids[row])]["language"]] = (
+            by_lang.get(meta[int(fs.item_ids[row])]["language"], 0) + 1
+        )
+    assert by_lang.get("kn", 0) >= MIN_POOL_PER_LANGUAGE, by_lang
+    # English is large enough that the quantile governs, not the floor.
+    assert by_lang.get("en", 0) >= 100, by_lang
+
+
+def test_a_language_with_a_handful_of_titles_is_not_a_stratum():
+    from entertainer.coldstart.elicit import recognisable_pool
+
+    fs = _space(n=300, d=16, seed=7)
+    meta = {
+        int(i): {
+            "language": "en" if i < 295 else "xx",
+            "imdb_votes": 50_000,
+            "quality": 0.6,
+        }
+        for i in fs.item_ids.tolist()
+    }
+    pool = recognisable_pool(fs, meta)
+    langs = {meta[int(fs.item_ids[r])]["language"] for r in pool.tolist()}
+    assert langs == {"en"}, langs
+
+
+def test_pool_still_prefers_the_better_known_titles():
+    from entertainer.coldstart.elicit import recognisable_pool
+
+    fs = _space(n=400, d=16, seed=8)
+    meta = {
+        int(i): {"language": "en", "imdb_votes": int(i) * 100, "quality": 0.6}
+        for i in fs.item_ids.tolist()
+    }
+    pool = recognisable_pool(fs, meta, quantile=0.90)
+    votes = [meta[int(fs.item_ids[r])]["imdb_votes"] for r in pool.tolist()]
+    assert min(votes) > max(
+        meta[int(i)]["imdb_votes"] for i in range(50)
+    ), "the least-voted titles must not be in the question pool"

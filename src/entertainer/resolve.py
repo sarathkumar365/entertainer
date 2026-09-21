@@ -112,7 +112,9 @@ def search(
     if not norm:
         return []
 
-    kind_clause = f" AND kind = '{kind}'" if kind in ("movie", "tv") else ""
+    kind_filter = kind if kind in ("movie", "tv") else None
+    kind_clause = " AND kind = ?" if kind_filter else ""
+    kind_param = [kind_filter] if kind_filter else []
     year_clause = ""
     params: list = []
     if year:
@@ -136,7 +138,7 @@ def search(
         {kind_clause}{year_clause}
         ORDER BY imdb_votes DESC NULLS LAST LIMIT 40
         """,
-        [norm, norm, raw.lower(), raw.lower(), *params],
+        [norm, norm, raw.lower(), raw.lower(), *kind_param, *params],
     ).fetchall()
     matches = _rows_to_matches(rows, lambda r: 1.0 + _popularity_bonus(r[6]) + year_bonus(r))
     if matches:
@@ -150,7 +152,7 @@ def search(
         {kind_clause}{year_clause}
         ORDER BY imdb_votes DESC NULLS LAST LIMIT 120
         """,
-        [f"%{raw.lower()}%", f"%{raw.lower()}%", *params],
+        [f"%{raw.lower()}%", f"%{raw.lower()}%", *kind_param, *params],
     ).fetchall()
 
     def contain_score(r) -> float:
@@ -190,12 +192,14 @@ def search(
         {kind_clause}
         ORDER BY imdb_votes DESC NULLS LAST LIMIT 4000
         """,
-        [f"{first}%", f"{first}%"],
+        [f"{first}%", f"{first}%", *kind_param],
     ).fetchall()
     if not rows:
+        where = "WHERE kind = ?" if kind_filter else ""
         rows = con.execute(
-            f"""{_SELECT} FROM titles {('WHERE ' + kind_clause[5:]) if kind_clause else ''}
-            ORDER BY imdb_votes DESC NULLS LAST LIMIT 30000"""
+            f"""{_SELECT} FROM titles {where}
+            ORDER BY imdb_votes DESC NULLS LAST LIMIT 30000""",
+            kind_param,
         ).fetchall()
 
     try:

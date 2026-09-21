@@ -13,6 +13,10 @@ matrix in RAM.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 from rich.console import Console
 
@@ -111,9 +115,7 @@ def encode_query(text: str, model=None, dim: int = ENCODER_DIM_TARGET) -> np.nda
 SHARD_SIZE = 20_000
 
 
-def _shard_dir(stem: str) -> "Path":
-    from pathlib import Path
-
+def _shard_dir(stem: str) -> Path:
     return Path(PATHS.embeddings) / f"{stem}_shards"
 
 
@@ -138,9 +140,6 @@ def encode_resumable(
     shards it actually affected rather than silently pairing new ids with old
     vectors.
     """
-    import hashlib
-    import json
-
     directory = _shard_dir(stem)
     directory.mkdir(parents=True, exist_ok=True)
 

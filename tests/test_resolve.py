@@ -95,3 +95,24 @@ def test_longer_numeric_titles_still_match_exactly(con):
     )
     match, _ = resolve_one(con, "1917")
     assert match is not None and match.item_id == 8
+
+
+def test_a_title_containing_a_quote_does_not_break_the_query(con):
+    """Titles are user input reaching SQL; apostrophes are extremely common."""
+    con.execute(
+        "INSERT INTO titles (item_id, imdb_id, title, original_title, year, language, "
+        "imdb_votes, kind) VALUES (9, 'tt0000009', ?, ?, 1993, 'en', 300000, 'movie')",
+        ["Schindler's List", "Schindler's List"],
+    )
+    match, _ = resolve_one(con, "Schindler's List")
+    assert match is not None and match.item_id == 9
+    # And a hostile one resolves to nothing rather than executing.
+    assert not search(con, "'; DROP TABLE titles; --")
+    assert con.execute("SELECT count(*) FROM titles").fetchone()[0] > 0
+
+
+def test_kind_filter_is_parameterised_not_interpolated(con):
+    assert not search(con, "Breaking Bad", kind="movie")
+    assert search(con, "Breaking Bad", kind="tv")
+    # An unrecognised kind is ignored rather than injected.
+    assert search(con, "Breaking Bad", kind="'; DROP TABLE titles; --")
