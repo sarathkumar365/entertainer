@@ -325,9 +325,16 @@ track critical consensus, ignore it, or run against it.
 
 ## Privacy
 
-`.env`, `data/`, and every rating you give are gitignored. Nothing about your
-taste is uploaded anywhere. TMDB is contacted only to fetch public catalogue
-metadata, never to send anything about you.
+`.env`, `data/`, `profile*.jsonl` and every rating you give are gitignored.
+Nothing about your taste is uploaded anywhere. TMDB is contacted only to fetch
+public catalogue metadata, never to send anything about you.
+
+`tests/test_packaging.py` asserts those exclusions still hold, and that no
+source file is ignored — the two failure modes are opposites and a single
+careless pattern causes both. A bare `data/` once matched
+`src/entertainer/data/` and silently excluded the whole ingest layer from the
+repository, while `profile.jsonl` — the default export of your entire viewing
+history — was not excluded at all.
 
 ## Licence
 

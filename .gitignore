@@ -8,6 +8,13 @@
 # src/entertainer/data/ — the entire ingest layer — from the repository.
 /data/
 /profile/
+
+# Exported verdict history. `ent export` writes profile.jsonl to the working
+# directory by default, and this repository is public: an export left in place
+# would publish the user's entire viewing history on the next `git add -A`.
+profile.jsonl
+*.profile.jsonl
+profile*.jsonl
 *.duckdb
 *.duckdb.wal
 *.parquet

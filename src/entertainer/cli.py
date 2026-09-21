@@ -1108,7 +1108,11 @@ def history(limit: int = typer.Option(30)) -> None:
 
 @app.command("export")
 def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
-    """Export your verdicts so the catalogue can be rebuilt without losing them."""
+    """Export your verdicts so the catalogue can be rebuilt without losing them.
+
+    The default filename is gitignored, because this repository is public and
+    the export is a complete record of what you watch.
+    """
     _require_catalog()
     with store.session(read_only=True) as con:
         rows = con.execute(
@@ -1130,6 +1134,7 @@ def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
                 + "\n"
             )
     console.print(f"[green]{len(rows):,} events -> {path}[/green]")
+    console.print("[dim]this file is your viewing history; keep it out of public repos[/dim]")
 
 
 @app.command("import")
