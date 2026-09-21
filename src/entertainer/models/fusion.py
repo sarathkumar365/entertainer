@@ -41,7 +41,7 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 
-from ..config import FUSED_DIM, PATHS
+from ..config import CF_RANK, FUSED_DIM, PATHS
 
 console = Console()
 
@@ -119,6 +119,7 @@ def build(
     movielens_of_item: dict[int, int],
     dim: int = FUSED_DIM,
     seed: int = 0,
+    cf_rank: int = CF_RANK,
 ) -> FusionArtifacts:
     """Construct the fused space.
 
@@ -139,16 +140,27 @@ def build(
     console.print(f"[dim]genuine CF factors for {has_cf.sum():,}/{n:,} titles "
                   f"({coverage:.1%})[/dim]")
 
-    cf_dim = cf_factors.shape[1]
-    cf_block = np.zeros((n, cf_dim), dtype=np.float32)
-    cf_block[has_cf] = cf_factors[cf_row[has_cf]]
+    observed = cf_factors[cf_row[has_cf]]
 
-    # Standardise the CF block on the observed rows only, so the imputation
-    # target is well conditioned.
-    cf_mean = cf_block[has_cf].mean(0)
-    cf_std = cf_block[has_cf].std(0) + 1e-6
-    cf_obs = (cf_block[has_cf] - cf_mean) / cf_std
+    # Truncate the factors to their leading principal components before
+    # anything else. See config.CF_RANK for the measurements: the trailing
+    # dimensions carry variance but almost no similarity structure, and they
+    # are the part content cannot predict, so keeping them halves the
+    # imputation accuracy for the majority of the catalogue while buying
+    # under two per cent of the geometry.
+    cf_mean = observed.mean(0)
+    rank = min(cf_rank, observed.shape[1], observed.shape[0])
+    cf_pca = PCA(n_components=rank, svd_solver="randomized", random_state=seed)
+    cf_obs = cf_pca.fit_transform(observed - cf_mean).astype(np.float32)
+    cf_scale = float(cf_obs.std()) + 1e-9
+    cf_obs /= cf_scale
+    kept = float(cf_pca.explained_variance_ratio_.sum())
+    console.print(
+        f"[dim]collaborative factors {observed.shape[1]} -> {rank} components "
+        f"({kept:.1%} of their variance)[/dim]"
+    )
 
+    cf_dim = rank
     ridge, cf_r2 = _fit_cf_map(content[has_cf], cf_obs, seed=seed)
     cf_full = np.empty((n, cf_dim), dtype=np.float32)
     cf_full[has_cf] = cf_obs

@@ -557,3 +557,59 @@ def test_an_unknown_runtime_fails_a_runtime_constraint(world):
     fs = build_features(ids, latent, meta)
     keep = Filters(max_runtime=100).mask(fs)
     assert list(keep) == [True, False, False, True]
+
+
+def test_truncating_collaborative_factors_improves_imputation(world):
+    """The measurement that set CF_RANK, reproduced on synthetic data.
+
+    iALS spreads variance across all its dimensions, but only the leading
+    directions are recoverable from text. Keeping the rest halves the
+    imputation accuracy for every title MovieLens never covered — which is
+    most of a multilingual catalogue.
+    """
+    content, covered = world["content"], world["covered"]
+    cluster = world["cluster"]
+    rng = np.random.default_rng(21)
+
+    # Collaborative factors: a few content-aligned directions, then noise that
+    # no synopsis could predict — the shape the real factors turned out to have.
+    signal = rng.normal(size=(N_CLUSTERS, 8))
+    factors = np.hstack(
+        [
+            signal[cluster[covered]] + 0.3 * rng.normal(size=(len(covered), 8)),
+            rng.normal(size=(len(covered), 56)),
+        ]
+    ).astype(np.float32)
+
+    item_ids = np.arange(N_ITEMS, dtype=np.int32)
+    mapping = {int(i): int(i) for i in covered}
+
+    low = fusion.build(
+        item_ids, content, covered.astype(np.int32), factors, mapping,
+        dim=32, seed=0, cf_rank=8,
+    )
+    full = fusion.build(
+        item_ids, content, covered.astype(np.int32), factors, mapping,
+        dim=32, seed=0, cf_rank=64,
+    )
+    assert low.cf_r2 > full.cf_r2, (low.cf_r2, full.cf_r2)
+    assert low.block_sizes[1] == 8
+    assert full.block_sizes[1] == 64
+
+
+def test_truncation_keeps_the_projection_consistent(world):
+    """Out-of-sample projection must still land on in-sample coordinates."""
+    content, covered = world["content"], world["covered"]
+    item_ids = np.arange(N_ITEMS, dtype=np.int32)
+    rng = np.random.default_rng(22)
+    factors = rng.normal(size=(len(covered), 40)).astype(np.float32)
+
+    art = fusion.build(
+        item_ids, content, covered.astype(np.int32), factors,
+        {int(i): int(i) for i in covered}, dim=24, seed=0, cf_rank=12,
+    )
+    uncovered = np.setdiff1d(np.arange(N_ITEMS), covered)[:30]
+    cosines = np.einsum(
+        "ij,ij->i", art.project(content[uncovered]), art.space[uncovered]
+    )
+    assert cosines.min() > 0.999, cosines.min()

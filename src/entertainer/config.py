@@ -225,4 +225,28 @@ ENCODER_FALLBACK = "intfloat/multilingual-e5-base"
 ENCODER_DIM_TARGET = 256  # Matryoshka truncation of the raw encoder output.
 
 CF_FACTORS = 192
+
+# Rank the collaborative factors are truncated to before fusion.
+#
+# iALS spreads variance almost uniformly across its 192 dimensions, but only
+# the leading directions are recoverable from text: measured on the real
+# catalogue, content predicts the top 16 components with R^2 0.20 and all 192
+# with R^2 0.07. The trailing dimensions are idiosyncratic co-watch signal
+# that no synopsis contains.
+#
+# Truncating loses less than it sounds. The top 48 components hold only 38%
+# of the raw variance but preserve 98.2% of item-to-item similarity, which is
+# the only thing the fused space uses the factors for. Measured:
+#
+#     rank   imputation R^2   similarity preserved
+#       16           0.202                   0.909
+#       32           0.158                   0.962
+#       48           0.138                   0.982
+#       64           0.123                   0.990
+#      192           0.075                   1.000
+#
+# 48 is the knee: near-double the imputation accuracy for the half of the
+# catalogue MovieLens never saw, at 1.8% of the similarity structure.
+CF_RANK = 48
+
 FUSED_DIM = 192
