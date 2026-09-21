@@ -151,6 +151,84 @@ has not shifted underneath it.
 
 ## 5. Results
 
-*Pending the full catalogue build. This section will contain the tables
-produced by the commands above, with the catalogue size, language
-distribution and CF coverage they were measured against.*
+Measured 2026-09-21 against the built catalogue: 73,491 titles, 47.4% with
+genuine MovieLens collaborative factors, 300 held-out users, 30 answered
+questions each, V-optimal elicitation. Run with
+`ent eval --users 300 --budget 30`.
+
+### The table
+
+| arm | NDCG@10 | P@10 | MAP@10 | novelty | diversity | serendipity |
+|---|---|---|---|---|---|---|
+| ridge | **0.1726** ±0.0144 | 0.2108 | 0.1025 | 10.18 | 0.394 | 0.022 |
+| entertainer, flat prior | 0.1631 ±0.0147 | 0.1957 | 0.0950 | 10.31 | 0.392 | 0.023 |
+| **entertainer** | 0.1607 ±0.0146 | 0.1978 | 0.0924 | 10.27 | 0.388 | 0.027 |
+| popularity | 0.1557 ±0.0130 | 0.1817 | 0.0826 | 9.11 | 0.570 | 0.000 |
+| weighted-kNN | 0.1540 ±0.0139 | 0.1871 | 0.0890 | 10.65 | 0.384 | 0.030 |
+| content-centroid | 0.1492 ±0.0142 | 0.1774 | 0.0867 | 10.83 | 0.396 | 0.038 |
+| quality-prior | 0.0340 ±0.0058 | 0.0430 | 0.0124 | 11.52 | 0.770 | 0.003 |
+| entertainer, no negatives | 0.0033 ±0.0033 | 0.0043 | 0.0022 | 15.17 | 0.662 | 0.000 |
+
+Paired bootstrap of the full engine against each arm:
+
+```
+vs quality-prior            Δ=+0.1267  p=0.0000  significant
+vs entertainer-no-negatives Δ=+0.1574  p=0.0000  significant
+vs content-centroid         Δ=+0.0115  p=0.1998  not significant
+vs weighted-kNN             Δ=+0.0067  p=0.3037  not significant
+vs popularity               Δ=+0.0050  p=0.3846  not significant
+vs entertainer-flat-prior   Δ=-0.0024  p=0.7703  not significant
+vs ridge                    Δ=-0.0119  p=0.9584  not significant
+```
+
+### What this shows
+
+**The engine has not earned its complexity.** It is statistically
+indistinguishable from plain ridge regression on identical features, from a
+rating-weighted kNN, and from ranking by vote count. Ridge is nominally ahead
+of it. Nothing in the Bayesian treatment — the evidence-tuned
+hyperparameters, the random-feature lift, the population prior — is currently
+paying for itself on this measurement.
+
+**The population prior contributes nothing here** (Δ=−0.0024). On synthetic
+data it was worth +0.46 correlation at n=4. That gain did not survive contact
+with real users, and the honest reading is that the synthetic world was too
+easy rather than that the idea is sound but unlucky.
+
+**Implicit negatives are the whole ballgame** (Δ=+0.157, p<0.0001). Without
+sampled unrated titles the model scores 0.0033 — worse than arbitrary
+ordering. This is the one component whose value is beyond argument.
+
+**Accuracy is not the only axis and the spread is narrow.** Popularity gets
+0.1557 with serendipity 0.000 and novelty 9.11 — it returns the canon, by
+construction. The engine reaches the same accuracy at novelty 10.27 and
+serendipity 0.027, which is the difference between handing someone films they
+had already heard of and films they had not. That is a real distinction and
+it is also not what NDCG measures, so it is reported beside the accuracy
+rather than folded into it.
+
+### What this does not show
+
+This is a replay of strangers from a public dataset. It says the *method* is
+sound-but-unremarkable; it says nothing about whether the engine is good for
+the person who built it. MovieLens held-out positives are popularity-biased —
+people rate films they have heard of — which is precisely the regime where a
+popularity baseline is hardest to beat and personalisation is worth least.
+
+The measurement that matters is `ent audit` on a real verdict log, and it
+cannot run until there is one.
+
+### Prior runs
+
+Kept deliberately, because two of them were wrong in instructive ways.
+
+| run | engine NDCG@10 | what it actually measured |
+|---|---|---|
+| first | 0.0036 | a degenerate fit — the compressed reward band collapsed every weight to zero |
+| second | 0.1623 | real, but against a broken kNN (0.003) and a ridge arm denied the sampled negatives |
+| third | 0.1607 | the table above, all arms given the same advantages |
+
+The second run appeared to show the engine significantly beating ridge and
+the centroid. It did not; it showed two handicapped baselines. Fixing them
+erased the win. Retaining these rows is the point of the exercise — the
+flattering run is the one that would have been quoted.

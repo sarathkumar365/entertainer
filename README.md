@@ -231,6 +231,19 @@ The protocol is fixed in advance and written down in
 counts as success after seeing the numbers is how offline recommender
 evaluation usually goes wrong.
 
+**Current standing, stated plainly: the engine has not earned its
+complexity.** On 300 held-out users it is statistically indistinguishable
+from plain ridge regression on the same features (Δ=−0.0119, p=0.96), from a
+weighted kNN, and from ranking by vote count. It reaches that accuracy at
+higher novelty and non-zero serendipity, which is a real difference and also
+not what NDCG measures. The one component whose value is beyond argument is
+implicit negatives, worth +0.157 (p<0.0001).
+
+Two earlier runs looked better and were wrong — one measured a degenerate
+fit, the other measured handicapped baselines. Both are kept in the results
+document, because the flattering run is the one that would otherwise have
+been quoted.
+
 ---
 
 ## Install

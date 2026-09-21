@@ -39,6 +39,8 @@ general principle.
 - A preference model trained only on things the user rated has never seen "not for me": adding sampled unrated negatives took NDCG@10 from 0.0922 to 0.1970.
 - A catastrophic-looking result can be an interaction, not a cause — the population prior scored 0.0036 only because the underlying fit was degenerate; with negatives it is neutral.
 - Always run the real benchmark before believing a component helps: three separate things that improved on synthetic data did nothing or harmed on held-out users.
+- A handicapped baseline manufactures a win: giving ridge the sampled negatives and fixing kNN's normalisation erased an apparent significant victory entirely — fix the baselines before believing the result, not after.
+- Keep the losing runs. The flattering one is the one that gets quoted, so the record has to contain the corrections beside it.
 
 ## Process
 
