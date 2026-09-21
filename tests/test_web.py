@@ -87,6 +87,8 @@ def client(tmp_path, monkeypatch):
 def test_index_serves(client):
     r = client.get("/")
     assert r.status_code == 200
+    assert "function escapeHtml" in r.text
+    assert "function posterUrl" in r.text
     assert "entertainer" in r.text
 
 
@@ -231,19 +233,19 @@ def test_invalid_bearer_falls_back_to_api_key(monkeypatch):
 
 
 def test_sealed_validation_preserves_predictions_before_reveal(client):
-    feed = client.get("/api/feed?years=4&limit=12").json()["items"]
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
     for item in feed[:3]:
         assert client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"}).json()["ok"]
 
-    sealed = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:7]]})
+    sealed = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:23]]})
     assert sealed.status_code == 200
     cases = sealed.json()["cases"]
-    assert len(cases) == 4
+    assert len(cases) == 20
 
     assert client.post("/api/rate", json={"item_id": feed[3]["item_id"], "verdict": "love"}).status_code == 400
 
     # A validation title is now protected from accidental direct rating.
-    duplicate = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:5]]})
+    duplicate = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:23]]})
     assert duplicate.status_code == 400
 
     for case in cases:
@@ -253,7 +255,7 @@ def test_sealed_validation_preserves_predictions_before_reveal(client):
     # A second reveal would mutate the sealed experiment and is forbidden.
     assert client.post(f"/api/validation/{cases[0]['case_id']}/reveal", json={"verdict": "meh"}).status_code == 400
     report = client.get("/api/validation/summary").json()
-    assert report["completed_cases"] == 4
+    assert report["completed_cases"] == 20
     assert report["full"]["top10_hit_rate"] == 1.0
     assert report["full"]["top10_hit_rate_ci95"] is not None
 

@@ -20,6 +20,7 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
+from ..archives import extract_zip
 from ..config import IMDB_BASE, IMDB_FILES, MOVIELENS_URL, PATHS
 
 _CHUNK = 1 << 20
@@ -89,7 +90,7 @@ def fetch_movielens() -> Path:
     with _progress() as bar:
         fetch(MOVIELENS_URL, archive, bar)
     with zipfile.ZipFile(archive) as zf:
-        zf.extractall(PATHS.raw)
+        extract_zip(zf, PATHS.raw)
     # The archive unpacks into ml-32m/ already; guard against a nested layout.
     if not (target / "ratings.csv").exists():
         for cand in PATHS.raw.glob("ml-32m*/ratings.csv"):

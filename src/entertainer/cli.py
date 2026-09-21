@@ -144,7 +144,7 @@ def setup(
     """Run everything: download, build, enrich, prune, embed, factorise, fuse, prior."""
     from .data import catalog, download
 
-    info = pipeline_preflight()
+    info = pipeline_preflight(require_tmdb=not skip_enrich)
     reporter = Reporter(settings={
         "skip_enrich": skip_enrich,
         "enrich_limit": enrich_limit,
@@ -1387,7 +1387,7 @@ def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
 def import_profile(path: Path = typer.Argument(...)) -> None:
     """Re-import an exported profile, matching on IMDb id."""
     _require_catalog()
-    imported, missing = 0, 0
+    imported, missing, duplicates = 0, 0, 0
     with store.session() as con:
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -1399,12 +1399,23 @@ def import_profile(path: Path = typer.Argument(...)) -> None:
             if not row:
                 missing += 1
                 continue
-            store.log_event(
-                con, int(row[0]), rec["kind"], rec.get("value"),
-                rec.get("source", "import"), rec.get("context"),
-            )
-            imported += 1
-    console.print(f"[green]imported {imported:,}[/green]" + (f", [yellow]{missing} not in catalogue[/yellow]" if missing else ""))
+            try:
+                added = store.import_event(
+                    con, int(row[0]), rec["kind"], rec.get("value"),
+                    rec.get("source", "import"), rec["ts"], rec.get("context"),
+                )
+            except (KeyError, ValueError) as exc:
+                _fail(f"invalid profile record: {exc}")
+            if added:
+                imported += 1
+            else:
+                duplicates += 1
+    message = f"[green]imported {imported:,}[/green]"
+    if duplicates:
+        message += f", [dim]{duplicates} already present[/dim]"
+    if missing:
+        message += f", [yellow]{missing} not in catalogue[/yellow]"
+    console.print(message)
 
 
 @app.command()

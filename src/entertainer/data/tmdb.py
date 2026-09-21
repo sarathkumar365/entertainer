@@ -191,18 +191,14 @@ async def enrich_async(
     on_batch=None,
     batch_size: int = 500,
 ) -> list[EnrichResult]:
+    concurrency = max(1, int(concurrency))
     headers, params = _auth()
     limiter = RateLimiter(per_second=concurrency)
-    sem = asyncio.Semaphore(concurrency)
     results: list[EnrichResult] = []
     pending: list[EnrichResult] = []
 
     limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency)
     async with httpx.AsyncClient(headers=headers, limits=limits, http2=False) as client:
-
-        async def run(iid: str) -> EnrichResult:
-            async with sem:
-                return await _enrich_one(client, iid, params, limiter, keywords)
 
         with Progress(
             TextColumn("[bold blue]TMDB enrich"),
@@ -213,16 +209,21 @@ async def enrich_async(
         ) as bar:
             task = bar.add_task("enrich", total=len(imdb_ids))
             started = time.monotonic()
-            tasks = [asyncio.create_task(run(i)) for i in imdb_ids]
-            for coro in asyncio.as_completed(tasks):
-                res = await coro
-                results.append(res)
-                pending.append(res)
-                bar.advance(task)
-                _tick(len(results), len(imdb_ids), started, "enrich")
-                if on_batch and len(pending) >= batch_size:
-                    on_batch(pending)
-                    pending = []
+            # Keep at most ``concurrency`` tasks alive. A semaphore alone only
+            # limits active requests; creating 270k waiting Task objects first
+            # can exhaust memory before the first response arrives.
+            for start in range(0, len(imdb_ids), concurrency):
+                batch = imdb_ids[start : start + concurrency]
+                for res in await asyncio.gather(
+                    *(_enrich_one(client, iid, params, limiter, keywords) for iid in batch)
+                ):
+                    results.append(res)
+                    pending.append(res)
+                    bar.advance(task)
+                    _tick(len(results), len(imdb_ids), started, "enrich")
+                    if on_batch and len(pending) >= batch_size:
+                        on_batch(pending)
+                        pending = []
             if on_batch and pending:
                 on_batch(pending)
     return results
@@ -261,19 +262,14 @@ async def backfill_keywords_async(
 
     ``targets``: (item_id, tmdb_id, kind) triples.
     """
+    concurrency = max(1, int(concurrency))
     headers, params = _auth()
     limiter = RateLimiter(per_second=concurrency)
-    sem = asyncio.Semaphore(concurrency)
     pending: list[tuple[int, list[str]]] = []
     done = 0
 
     limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency)
     async with httpx.AsyncClient(headers=headers, limits=limits) as client:
-
-        async def run(item_id: int, tmdb_id: int, kind: str):
-            async with sem:
-                _, kws = await _keywords_only(client, tmdb_id, kind, params, limiter)
-                return item_id, kws
 
         with Progress(
             TextColumn("[bold blue]TMDB keywords"),
@@ -284,15 +280,19 @@ async def backfill_keywords_async(
         ) as bar:
             task = bar.add_task("kw", total=len(targets))
             started = time.monotonic()
-            tasks = [asyncio.create_task(run(*t)) for t in targets]
-            for coro in asyncio.as_completed(tasks):
-                pending.append(await coro)
-                done += 1
-                bar.advance(task)
-                _tick(done, len(targets), started, "keywords")
-                if on_batch and len(pending) >= batch_size:
-                    on_batch(pending)
-                    pending = []
+            for start in range(0, len(targets), concurrency):
+                batch = targets[start : start + concurrency]
+                resolved = await asyncio.gather(
+                    *(_keywords_only(client, tmdb_id, kind, params, limiter) for _, tmdb_id, kind in batch)
+                )
+                for (item_id, _, _), (_tmdb_id, keywords) in zip(batch, resolved, strict=True):
+                    pending.append((item_id, keywords))
+                    done += 1
+                    bar.advance(task)
+                    _tick(done, len(targets), started, "keywords")
+                    if on_batch and len(pending) >= batch_size:
+                        on_batch(pending)
+                        pending = []
             if on_batch and pending:
                 on_batch(pending)
     return done

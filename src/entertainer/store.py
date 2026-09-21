@@ -209,6 +209,41 @@ def log_event(
     )
 
 
+def import_event(
+    con: duckdb.DuckDBPyConnection,
+    item_id: int,
+    kind: str,
+    value: float | None,
+    source: str,
+    timestamp: str,
+    context: dict | None = None,
+) -> bool:
+    """Restore one exported event once, retaining its original observation time."""
+    # ``ent export`` parses and writes the JSON object in insertion order, so
+    # preserving that order keeps a round-trip byte-identical to the original
+    # event context without changing user-visible provenance.
+    encoded = json.dumps(context or {})
+    existing = con.execute(
+        """
+        SELECT 1 FROM events
+        WHERE item_id = ? AND kind = ? AND value IS NOT DISTINCT FROM ?
+          AND source = ? AND ts = CAST(? AS TIMESTAMP) AND context = ?
+        LIMIT 1
+        """,
+        [item_id, kind, value, source, timestamp, encoded],
+    ).fetchone()
+    if existing:
+        return False
+    con.execute(
+        """
+        INSERT INTO events
+        SELECT nextval('event_seq'), CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?
+        """,
+        [timestamp, item_id, kind, value, source, encoded],
+    )
+    return True
+
+
 def log_impressions(
     con: duckdb.DuckDBPyConnection,
     slate_id: str,

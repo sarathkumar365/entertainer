@@ -79,7 +79,7 @@ class AddRequest(BaseModel):
 
 
 class ValidationSealRequest(BaseModel):
-    item_ids: list[int] = Field(min_length=2, max_length=100)
+    item_ids: list[int] = Field(min_length=20, max_length=100)
 
 
 class ValidationRevealRequest(BaseModel):

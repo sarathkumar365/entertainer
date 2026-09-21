@@ -82,7 +82,10 @@ def test_bundle_refuses_to_clobber_recorded_verdicts(tmp_path, monkeypatch):
     config2, store2, bundle2 = _fresh(tmp_path, monkeypatch, "tgt2")
     _populate(store2, n=5)
     con = store2.connect()
-    store2.log_event(con, 1, "rate", 9.0, "manual", {"verdict": "love"})
+    # Same IMDb title, deliberately different positional id. A restore must
+    # remap this event to the source bundle's id rather than preserve ``100``.
+    con.execute("UPDATE titles SET item_id = 100 WHERE item_id = 1")
+    store2.log_event(con, 100, "rate", 9.0, "manual", {"verdict": "love"})
     con.close()
 
     with pytest.raises(RuntimeError, match="already has 1 recorded events"):
@@ -95,7 +98,21 @@ def test_bundle_refuses_to_clobber_recorded_verdicts(tmp_path, monkeypatch):
     # The catalogue was replaced; the verdict survived.
     assert con.execute("SELECT count(*) FROM titles").fetchone()[0] == 40
     assert con.execute("SELECT count(*) FROM events").fetchone()[0] == 1
+    assert con.execute("SELECT item_id FROM events").fetchone()[0] == 1
     con.close()
+
+
+def test_bundle_rejects_path_traversal_before_extracting(tmp_path, monkeypatch):
+    import zipfile
+
+    _config, _store, bundle = _fresh(tmp_path, monkeypatch, "unsafe")
+    archive = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(bundle.MANIFEST, '{"format": 1, "contents": []}')
+        zf.writestr("../outside", "nope")
+    with pytest.raises(ValueError, match="escapes destination"):
+        bundle.restore(archive)
+    assert not (tmp_path / "outside").exists()
 
 
 def test_space_can_be_left_out_for_a_rating_only_machine(tmp_path, monkeypatch):

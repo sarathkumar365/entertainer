@@ -13,7 +13,9 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, RLock, Thread
 from typing import Any
 
 from .config import PATHS
@@ -28,6 +30,8 @@ STAGES = (
     ("fusion", "Fusing movie signals"),
     ("prior", "Learning a cautious starting point"),
 )
+HEARTBEAT_SECONDS = 10
+STALE_SECONDS = HEARTBEAT_SECONDS * 3
 
 
 def build_root(root: Path | None = None) -> Path:
@@ -47,6 +51,7 @@ class Reporter:
         self.path = self.root / self.build_id
         self.path.mkdir(parents=True, exist_ok=False)
         self.events_path = self.path / "events.jsonl"
+        self._lock = RLock()
         self.state: dict[str, Any] = {
             "id": self.build_id,
             "status": "running",
@@ -70,39 +75,65 @@ class Reporter:
         os.replace(active_tmp, self.root / "active")
 
     def event(self, kind: str, **data: Any) -> None:
-        record = {"at": _now(), "kind": kind, **data}
-        with self.events_path.open("a", encoding="utf-8") as out:
-            out.write(json.dumps(record, sort_keys=True) + "\n")
-            out.flush()
-        self.state["updated_at"] = record["at"]
-        self._write_state()
+        with self._lock:
+            record = {"at": _now(), "kind": kind, **data}
+            with self.events_path.open("a", encoding="utf-8") as out:
+                out.write(json.dumps(record, sort_keys=True) + "\n")
+                out.flush()
+            self.state["updated_at"] = record["at"]
+            self._write_state()
+
+    def heartbeat(self, stage_id: str) -> None:
+        """Refresh liveness without growing the immutable event log every ten seconds."""
+        with self._lock:
+            if self.state["status"] != "running" or self.state["stage"] != stage_id:
+                return
+            now = _now()
+            self.state["updated_at"] = now
+            self.state["heartbeat_at"] = now
+            self._write_state()
 
     @contextmanager
     def stage(self, stage_id: str, **detail: Any) -> Iterator[None]:
         started = time.monotonic()
-        self.state["stage"] = stage_id
-        for stage in self.state["stages"]:
-            if stage["id"] == stage_id:
-                stage["status"] = "running"
-                stage.update(detail)
+        with self._lock:
+            self.state["stage"] = stage_id
+            for stage in self.state["stages"]:
+                if stage["id"] == stage_id:
+                    stage["status"] = "running"
+                    stage.update(detail)
         self.event("stage_started", stage=stage_id, **detail)
+        stop = Event()
+        pulse = Thread(
+            target=lambda: self._pulse(stage_id, stop), name=f"entertainer-{stage_id}", daemon=True
+        )
+        pulse.start()
         try:
             yield
         except BaseException as exc:
-            for stage in self.state["stages"]:
-                if stage["id"] == stage_id:
-                    stage["status"] = "failed"
-                    stage["error"] = str(exc)
-            self.state["status"] = "failed"
+            with self._lock:
+                for stage in self.state["stages"]:
+                    if stage["id"] == stage_id:
+                        stage["status"] = "failed"
+                        stage["error"] = str(exc)
+                self.state["status"] = "failed"
             self.event("stage_failed", stage=stage_id, error=str(exc))
             raise
         else:
             elapsed = round(time.monotonic() - started, 3)
-            for stage in self.state["stages"]:
-                if stage["id"] == stage_id:
-                    stage["status"] = "complete"
-                    stage["elapsed_seconds"] = elapsed
+            with self._lock:
+                for stage in self.state["stages"]:
+                    if stage["id"] == stage_id:
+                        stage["status"] = "complete"
+                        stage["elapsed_seconds"] = elapsed
             self.event("stage_complete", stage=stage_id, elapsed_seconds=elapsed)
+        finally:
+            stop.set()
+            pulse.join(timeout=1)
+
+    def _pulse(self, stage_id: str, stop: Event) -> None:
+        while not stop.wait(HEARTBEAT_SECONDS):
+            self.heartbeat(stage_id)
 
     def complete(self, manifest_id: str | None = None) -> None:
         self.state["status"] = "complete"
@@ -128,7 +159,8 @@ def list_builds(root: Path | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for state in base.glob("build-*/state.json"):
         try:
-            records.append(json.loads(state.read_text(encoding="utf-8")))
+            record = json.loads(state.read_text(encoding="utf-8"))
+            records.append(_observed_state(record))
         except (OSError, json.JSONDecodeError):
             continue
     return sorted(records, key=lambda row: row.get("started_at", ""), reverse=True)
@@ -137,6 +169,23 @@ def list_builds(root: Path | None = None) -> list[dict[str, Any]]:
 def read_build(build_id: str, root: Path | None = None) -> dict[str, Any] | None:
     path = build_root(root) / build_id / "state.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _observed_state(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _observed_state(record: dict[str, Any]) -> dict[str, Any]:
+    """Report a dead writer honestly without mutating its immutable record."""
+    if record.get("status") != "running":
+        return record
+    raw = record.get("heartbeat_at") or record.get("updated_at")
+    try:
+        age = (datetime.now(UTC) - datetime.fromisoformat(str(raw).replace("Z", "+00:00"))).total_seconds()
+    except (TypeError, ValueError):
+        age = STALE_SECONDS + 1
+    if age <= STALE_SECONDS:
+        return record
+    observed = dict(record)
+    observed["status"] = "interrupted"
+    observed["interrupted"] = True
+    return observed

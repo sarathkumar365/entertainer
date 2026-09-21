@@ -18,6 +18,7 @@ from ..models.taste import verdict_to_reward
 LIKE_AT = 0.75
 PRELIMINARY_CASES = 30
 DECISION_CASES = 100
+MIN_RANKING_CANDIDATES = 20
 
 
 @dataclass(frozen=True)
@@ -79,8 +80,11 @@ def predict(engine: Engine, item_id: int) -> dict[str, float | bool]:
 def seal(engine: Engine, item_ids: list[int]) -> dict:
     """Persist predictions before any validation verdict can be recorded."""
     unique = list(dict.fromkeys(int(i) for i in item_ids))
-    if len(unique) < 2:
-        raise ValueError("seal at least two watched-but-unrated titles as one hidden pool")
+    if len(unique) < MIN_RANKING_CANDIDATES:
+        raise ValueError(
+            f"seal at least {MIN_RANKING_CANDIDATES} watched-but-unrated titles; "
+            "a Top-10 comparison needs more candidates than it displays"
+        )
     with store.session() as con:
         rated = {int(r[0]) for r in con.execute("SELECT DISTINCT item_id FROM events WHERE kind = 'rate'").fetchall()}
         existing = {int(r[0]) for r in con.execute("SELECT item_id FROM validation_cases").fetchall()}
@@ -157,7 +161,9 @@ def summary() -> dict:
     by_batch: dict[str, dict[int, tuple]] = {}
     for batch_id, item_id, *values in cases:
         by_batch.setdefault(batch_id, {})[int(item_id)] = tuple(float(v) for v in values)
-    full_hits, ridge_hits, full_mae, ridge_mae, full_brier = [], [], [], [], []
+    full_top10, ridge_top10, paired_lift = [], [], []
+    full_top10_labels, ridge_top10_labels = [], []
+    full_mae, ridge_mae, full_brier = [], [], []
     completed = 0
     for batch_id, full_json, ridge_json in batches:
         full_rank, ridge_rank = json.loads(full_json), json.loads(ridge_json)
@@ -167,13 +173,21 @@ def summary() -> dict:
         completed += len(rows)
         actual = {item: rows[item][-1] for item in rows}
         k = min(10, len(full_rank))
-        full_hits.extend(float(actual[i] >= LIKE_AT) for i in full_rank[:k])
-        ridge_hits.extend(float(actual[i] >= LIKE_AT) for i in ridge_rank[:k])
+        # Ranking metrics are one observation per sealed candidate slate. This
+        # keeps the model arms paired on exactly the same titles and prevents a
+        # 2-title pool from masquerading as a Top-10 result.
+        full_rate = float(np.mean([actual[i] >= LIKE_AT for i in full_rank[:k]]))
+        ridge_rate = float(np.mean([actual[i] >= LIKE_AT for i in ridge_rank[:k]]))
+        full_top10.append(full_rate)
+        ridge_top10.append(ridge_rate)
+        paired_lift.append(full_rate - ridge_rate)
+        full_top10_labels.extend(float(actual[i] >= LIKE_AT) for i in full_rank[:k])
+        ridge_top10_labels.extend(float(actual[i] >= LIKE_AT) for i in ridge_rank[:k])
         for _item, (score, _std, probability, ridge_score, _ridge_p, reward) in rows.items():
             full_mae.append(abs(score - reward))
             ridge_mae.append(abs(ridge_score - reward))
             full_brier.append((probability - float(reward >= LIKE_AT)) ** 2)
-    hit_delta = np.asarray(full_hits) - np.asarray(ridge_hits)
+    hit_delta = np.asarray(paired_lift)
     decision = "collecting"
     if completed >= DECISION_CASES:
         ci = _interval(hit_delta)
@@ -181,8 +195,8 @@ def summary() -> dict:
     return {
         "completed_cases": completed,
         "status": "preliminary" if PRELIMINARY_CASES <= completed < DECISION_CASES else decision,
-        "full": {"top10_hit_rate": float(np.mean(full_hits)) if full_hits else None, "top10_hit_rate_ci95": _interval(np.asarray(full_hits)), "mae": float(np.mean(full_mae)) if full_mae else None, "mae_ci95": _interval(np.asarray(full_mae)), "brier": float(np.mean(full_brier)) if full_brier else None},
-        "ridge": {"top10_hit_rate": float(np.mean(ridge_hits)) if ridge_hits else None, "top10_hit_rate_ci95": _interval(np.asarray(ridge_hits)), "mae": float(np.mean(ridge_mae)) if ridge_mae else None, "mae_ci95": _interval(np.asarray(ridge_mae))},
+        "full": {"top10_hit_rate": float(np.mean(full_top10)) if full_top10 else None, "top10_hit_rate_ci95": _interval(np.asarray(full_top10_labels)), "mae": float(np.mean(full_mae)) if full_mae else None, "mae_ci95": _interval(np.asarray(full_mae)), "brier": float(np.mean(full_brier)) if full_brier else None},
+        "ridge": {"top10_hit_rate": float(np.mean(ridge_top10)) if ridge_top10 else None, "top10_hit_rate_ci95": _interval(np.asarray(ridge_top10_labels)), "mae": float(np.mean(ridge_mae)) if ridge_mae else None, "mae_ci95": _interval(np.asarray(ridge_mae))},
         "top10_lift_ci95": _interval(hit_delta),
         "decision": decision,
     }

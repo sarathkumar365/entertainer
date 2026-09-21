@@ -50,7 +50,7 @@ def create_studio_app() -> FastAPI:
                 if encoded != previous:
                     yield f"data: {json.dumps(row)}\n\n"
                     previous = encoded
-                if row.get("status") in {"complete", "failed"}:
+                if row.get("status") in {"complete", "failed", "interrupted"}:
                     return
                 await asyncio.sleep(1)
 

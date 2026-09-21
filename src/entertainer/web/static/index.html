@@ -96,7 +96,7 @@
     <details>
       <summary>Filters and blind validation</summary>
       <div class="chips" id="chips"></div>
-      <div class="validation"><span id="validationmsg">Search for watched but unrated titles, then add at least two.</span><button class="ghost" id="sealvalidation" disabled>Seal hidden pool</button></div>
+      <div class="validation"><span id="validationmsg">Search for watched but unrated titles, then add at least 20.</span><button class="ghost" id="sealvalidation" disabled>Seal hidden pool</button></div>
     </details>
   </div>
   <div class="view" id="ratedview">
@@ -120,26 +120,37 @@ async function api(path, opts){
   return r.json();
 }
 
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function posterUrl(value){
+  try{
+    const u = new URL(String(value), window.location.origin);
+    return u.protocol === 'https:' && u.hostname === 'image.tmdb.org' ? u.href : null;
+  }catch(_){ return null; }
+}
+
 function card(it, external, readonly=false){
   const el = document.createElement('div');
   el.className = 'card';
-  const poster = it.poster
-    ? `<img class="poster" loading="lazy" src="${it.poster}" alt="">`
+  const source = posterUrl(it.poster);
+  const poster = source
+    ? `<img class="poster" loading="lazy" src="${source}" alt="">`
     : `<div class="poster"></div>`;
   const bits = [];
-  if(it.year) bits.push(`<span class="tag">${it.year}</span>`);
-  if(it.language_name) bits.push(`<span class="tag">${it.language_name}</span>`);
+  if(it.year) bits.push(`<span class="tag">${escapeHtml(it.year)}</span>`);
+  if(it.language_name) bits.push(`<span class="tag">${escapeHtml(it.language_name)}</span>`);
   if(it.kind === 'tv') bits.push(`<span class="tag">series</span>`);
   if(it.rating) bits.push(`<span class="tag">★ ${Number(it.rating).toFixed(1)}</span>`);
   if(external) bits.push(`<span class="badge">not in catalogue</span>`);
   el.innerHTML = `
     ${poster}
     <div class="meta">
-      <div class="t">${it.title ?? ''}</div>
-      ${it.original_title ? `<div class="ot">${it.original_title}</div>` : ``}
+      <div class="t">${escapeHtml(it.title)}</div>
+      ${it.original_title ? `<div class="ot">${escapeHtml(it.original_title)}</div>` : ``}
       <div class="sub">${bits.join('')}</div>
     </div>
-    ${readonly ? `<div class="verdict">${it.verdict || 'rated'}</div>` : `<div class="acts">${VERDICTS.map(([v,g]) => `<button data-v="${v}" title="${v}">${g}</button>`).join('')}</div>`}`;
+    ${readonly ? `<div class="verdict">${escapeHtml(it.verdict || 'rated')}</div>` : `<div class="acts">${VERDICTS.map(([v,g]) => `<button data-v="${v}" title="${v}">${g}</button>`).join('')}</div>`}`;
   if(readonly) return el;
   el.querySelectorAll('.acts button').forEach(b => {
     b.onclick = async () => {
@@ -192,11 +203,11 @@ let toastTimer;
 const selectedValidation = new Map(), validationCases = new Map();
 function updateValidation(){
   const n = selectedValidation.size;
-  $('#sealvalidation').disabled = n < 2;
+  $('#sealvalidation').disabled = n < 20;
   $('#sealvalidation').textContent = n ? `Seal ${n} watched titles` : 'Seal hidden pool';
   $('#validationmsg').textContent = n
-    ? `${n} title${n === 1 ? '' : 's'} queued. Sealing stores predictions before you rate them.`
-    : 'Blind test: search for films you have watched but have not rated, then add at least two.';
+    ? `${n} title${n === 1 ? '' : 's'} queued. Sealing stores predictions before you rate them; 20 are needed for a Top-10 test.`
+    : 'Blind test: search for watched but unrated films, then add at least 20.';
 }
 function toast(msg){
   $('#toastmsg').textContent = msg;

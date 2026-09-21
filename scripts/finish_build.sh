@@ -45,6 +45,9 @@ $ENT data prune 2>&1 | tee "$LOG_DIR/prune.log" | tail -30
 step "encode item cards"
 $ENT data embed --batch-size 64 2>&1 | tee "$LOG_DIR/embed.log" | tail -4
 
+step "factorise MovieLens"
+$ENT data cf --factors 192 --iterations 20 --holdout 2000 --signal watched 2>&1 | tee "$LOG_DIR/cf.log" | tail -4
+
 step "fuse item space"
 $ENT data fuse 2>&1 | tee "$LOG_DIR/fuse.log" | tail -4
 

@@ -75,26 +75,26 @@ def test_an_already_rated_title_cannot_become_a_blind_case(env):
     """Otherwise the model is graded on something it was trained on."""
     eng, personal, _ = env
     with pytest.raises(ValueError, match="already have an explicit rating"):
-        personal.seal(eng, [0, 30, 31])
+        personal.seal(eng, [0, *range(30, 49)])
 
 
 def test_a_title_cannot_be_sealed_twice(env):
     eng, personal, _ = env
-    personal.seal(eng, [30, 31, 32])
+    personal.seal(eng, list(range(30, 50)))
     with pytest.raises(ValueError, match="prior case"):
-        personal.seal(eng, [32, 33])
+        personal.seal(eng, list(range(32, 52)))
 
 
 def test_sealing_requires_titles_that_exist(env):
     eng, personal, _ = env
     with pytest.raises(ValueError, match="in the local catalogue"):
-        personal.seal(eng, [30, 99999])
+        personal.seal(eng, [*range(30, 49), 99999])
 
 
 def test_the_sealed_prediction_is_immutable_across_reveal(env):
     """The whole point: the prediction must predate the outcome."""
     eng, personal, store = env
-    batch = personal.seal(eng, [30, 31, 32, 33])
+    batch = personal.seal(eng, list(range(30, 50)))
 
     with store.session(read_only=True) as con:
         before = con.execute(
@@ -115,7 +115,7 @@ def test_the_sealed_prediction_is_immutable_across_reveal(env):
 
 def test_revealing_records_a_real_verdict_that_trains_the_model(env):
     eng, personal, store = env
-    batch = personal.seal(eng, [30, 31, 32, 33])
+    batch = personal.seal(eng, list(range(30, 50)))
     with store.session(read_only=True) as con:
         before = len(store.ratings(con))
 
@@ -129,7 +129,7 @@ def test_revealing_records_a_real_verdict_that_trains_the_model(env):
 
 def test_a_case_can_only_be_revealed_once(env):
     eng, personal, _ = env
-    batch = personal.seal(eng, [30, 31])
+    batch = personal.seal(eng, list(range(30, 50)))
     case = batch["cases"][0]["case_id"]
     personal.reveal(eng, case, "love")
     with pytest.raises(ValueError, match="only be revealed once"):
@@ -138,7 +138,7 @@ def test_a_case_can_only_be_revealed_once(env):
 
 def test_not_seen_leaves_the_case_unresolved_and_out_of_the_metrics(env):
     eng, personal, store = env
-    batch = personal.seal(eng, [30, 31, 32, 33])
+    batch = personal.seal(eng, list(range(30, 50)))
     for case in batch["cases"]:
         personal.reveal(eng, case["case_id"], "unseen")
 
@@ -159,7 +159,7 @@ def test_not_seen_leaves_the_case_unresolved_and_out_of_the_metrics(env):
 def test_a_partially_revealed_pool_contributes_no_ranking_metric(env):
     """A half-revealed pool could be cherry-picked into a flattering ranking."""
     eng, personal, _ = env
-    batch = personal.seal(eng, [30, 31, 32, 33, 34])
+    batch = personal.seal(eng, list(range(30, 50)))
     personal.reveal(eng, batch["cases"][0]["case_id"], "love")
     personal.reveal(eng, batch["cases"][1]["case_id"], "love")
 
@@ -170,12 +170,16 @@ def test_a_partially_revealed_pool_contributes_no_ranking_metric(env):
 
 def test_a_completed_pool_reports_both_arms_with_intervals(env):
     eng, personal, _ = env
-    batch = personal.seal(eng, [30, 31, 32, 33, 34, 35])
-    for i, case in enumerate(batch["cases"]):
-        personal.reveal(eng, case["case_id"], "love" if i % 2 else "dislike")
+    batches = [
+        personal.seal(eng, list(range(30, 50))),
+        personal.seal(eng, [*range(12, 30), 50, 51]),
+    ]
+    for batch in batches:
+        for i, case in enumerate(batch["cases"]):
+            personal.reveal(eng, case["case_id"], "love" if i % 2 else "dislike")
 
     s = personal.summary()
-    assert s["completed_cases"] == 6
+    assert s["completed_cases"] == 40
     for arm in ("full", "ridge"):
         assert s[arm]["top10_hit_rate"] is not None
         assert s[arm]["mae"] is not None
@@ -185,7 +189,7 @@ def test_a_completed_pool_reports_both_arms_with_intervals(env):
 def test_no_verdict_is_claimed_before_the_decision_threshold(env):
     """Thirty cases cannot settle this; the status must say so."""
     eng, personal, _ = env
-    batch = personal.seal(eng, [30, 31, 32, 33])
+    batch = personal.seal(eng, list(range(30, 50)))
     for case in batch["cases"]:
         personal.reveal(eng, case["case_id"], "love")
 
@@ -194,7 +198,7 @@ def test_no_verdict_is_claimed_before_the_decision_threshold(env):
     assert s["completed_cases"] < personal.DECISION_CASES
 
 
-def test_sealing_needs_a_pool_not_a_single_title(env):
+def test_sealing_needs_more_candidates_than_the_top_ten(env):
     eng, personal, _ = env
-    with pytest.raises(ValueError, match="at least two"):
-        personal.seal(eng, [30])
+    with pytest.raises(ValueError, match="at least 20"):
+        personal.seal(eng, list(range(30, 49)))

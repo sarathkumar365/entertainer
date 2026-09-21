@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
-from entertainer.build_events import Reporter, list_builds, read_build
+from entertainer.build_events import STALE_SECONDS, Reporter, list_builds, read_build
 from entertainer.web import studio
 
 
@@ -35,6 +37,18 @@ def test_failed_stage_is_visible_to_observer(tmp_path):
     assert state["status"] == "failed"
     assert state["stages"][1]["status"] == "failed"
     assert state["stages"][1]["error"] == "bad source"
+
+
+def test_stale_running_build_is_reported_as_interrupted(tmp_path):
+    reporter = Reporter(tmp_path)
+    state_path = tmp_path / reporter.build_id / "state.json"
+    state = json.loads(state_path.read_text())
+    state["updated_at"] = "2000-01-01T00:00:00Z"
+    state_path.write_text(json.dumps(state))
+    observed = read_build(reporter.build_id, tmp_path)
+    assert observed["status"] == "interrupted"
+    assert observed["interrupted"] is True
+    assert STALE_SECONDS > 0
 
 
 def test_studio_serves_page_and_builds(monkeypatch):

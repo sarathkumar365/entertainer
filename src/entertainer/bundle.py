@@ -21,11 +21,13 @@ from __future__ import annotations
 import json
 import shutil
 import zipfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
+from .archives import extract_zip
 from .config import PATHS
 from .store import connect
 
@@ -154,27 +156,69 @@ def restore(path: Path, overwrite: bool = False) -> dict:
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
     with zipfile.ZipFile(path) as zf:
-        zf.extractall(staging)
+        extract_zip(zf, staging)
 
     # Rebuild the catalogue table through the normal schema so that any
     # columns added since the bundle was written exist and are simply null,
     # rather than the restore failing on a shape mismatch.
-    con = connect()
-    columns = [r[1] for r in con.execute("PRAGMA table_info('titles')").fetchall()]
     parquet = staging / "titles.parquet"
-    available = {
-        r[0]
-        for r in con.execute(
-            f"SELECT column_name FROM (DESCRIBE SELECT * FROM '{parquet}')"
-        ).fetchall()
-    }
-    projection = ", ".join(
-        c if c in available else f"NULL AS {c}" for c in columns
-    )
-    con.execute("DELETE FROM titles")
-    con.execute(f"INSERT INTO titles ({', '.join(columns)}) SELECT {projection} FROM '{parquet}'")
-    restored = con.execute("SELECT count(*) FROM titles").fetchone()[0]
-    con.close()
+    if not parquet.exists():
+        shutil.rmtree(staging)
+        raise RuntimeError("bundle is missing titles.parquet")
+
+    con = connect()
+    try:
+        columns = [r[1] for r in con.execute("PRAGMA table_info('titles')").fetchall()]
+        available = {
+            r[0]
+            for r in con.execute(
+                f"SELECT column_name FROM (DESCRIBE SELECT * FROM '{parquet}')"
+            ).fetchall()
+        }
+        if "imdb_id" not in available:
+            raise RuntimeError("bundle catalogue has no IMDb ids for safe profile preservation")
+        projection = ", ".join(c if c in available else f"NULL AS {c}" for c in columns)
+
+        # Item ids are positional. Preserve an existing profile only when every
+        # referenced title can be mapped through its stable IMDb id; leaving an
+        # unmapped numeric id in place would silently attach a verdict to a
+        # different title after the replacement.
+        con.execute("CREATE OR REPLACE TEMP TABLE _bundle_titles AS SELECT * FROM read_parquet(?)", [str(parquet)])
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE _bundle_remap AS "
+            "SELECT old.item_id AS old_id, incoming.item_id AS new_id "
+            "FROM titles old JOIN _bundle_titles incoming USING (imdb_id)"
+        )
+        unmapped_events = con.execute(
+            "SELECT count(*) FROM events e LEFT JOIN _bundle_remap r ON e.item_id = r.old_id "
+            "WHERE r.new_id IS NULL"
+        ).fetchone()[0]
+        unmapped_impressions = con.execute(
+            "SELECT count(*) FROM impressions i LEFT JOIN _bundle_remap r ON i.item_id = r.old_id "
+            "WHERE r.new_id IS NULL"
+        ).fetchone()[0]
+        unmapped = int(unmapped_events) + int(unmapped_impressions)
+        if unmapped:
+            raise RuntimeError(
+                f"cannot preserve {unmapped} event(s): their titles are absent from this bundle; "
+                "export the profile first, then import it after restoring"
+            )
+
+        con.execute("BEGIN TRANSACTION")
+        con.execute("UPDATE events SET item_id = r.new_id FROM _bundle_remap r WHERE events.item_id = r.old_id")
+        con.execute("UPDATE impressions SET item_id = r.new_id FROM _bundle_remap r WHERE impressions.item_id = r.old_id")
+        con.execute("DELETE FROM titles")
+        con.execute(
+            f"INSERT INTO titles ({', '.join(columns)}) SELECT {projection} FROM _bundle_titles"
+        )
+        restored = con.execute("SELECT count(*) FROM titles").fetchone()[0]
+        con.execute("COMMIT")
+    except Exception:
+        with suppress(duckdb.Error):
+            con.execute("ROLLBACK")
+        raise
+    finally:
+        con.close()
 
     for name in SPACE + ENCODE:
         src = staging / name
