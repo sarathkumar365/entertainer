@@ -325,6 +325,7 @@ def fit(
     seed: int = 0,
     prior=None,
     alpha_anchor: float | None = None,
+    capacity_obs: int | None = None,
 ) -> TasteModel:
     """Fit the taste posterior, selecting model capacity by marginal likelihood.
 
@@ -340,6 +341,14 @@ def fit(
     overrides the hyperprior strength on the prior precision; it exists mainly
     so the reparameterisation can be tested against the isotropic fit it must
     reduce to.
+
+    ``capacity_obs`` is how many observations should count towards the
+    decision to add capacity, when that differs from how many rows were
+    passed. Sampled negatives pad the design matrix by a thousand rows but
+    carry no information about where this person's taste curves — licensing
+    a random-feature lift on their strength would be buying flexibility with
+    counterfeit evidence, and it made the fit an order of magnitude slower
+    for nothing.
     """
     X = np.atleast_2d(np.asarray(X, dtype=np.float32))
     y = np.asarray(rewards, dtype=np.float64).ravel()
@@ -362,8 +371,9 @@ def fit(
     y_mean = float(np.average(y, weights=sqrt_w**2))
     yc = y - y_mean
 
+    effective = n if capacity_obs is None else int(capacity_obs)
     candidates: list[tuple[int, float]] = [(0, 1.0)]
-    if allow_rff and n >= RFF_MIN_OBS:
+    if allow_rff and effective >= RFF_MIN_OBS:
         candidates += [(r, g) for r in rff_candidates if r for g in gamma_candidates]
 
     best: TasteModel | None = None
@@ -371,7 +381,7 @@ def fit(
         fm = FeatureMap(dim=d, n_rff=n_rff, gamma=gamma, seed=seed)
         # More features than observations is fine for a Bayesian model, but
         # the evidence computation gets numerically fragile past ~8x.
-        if fm.out_dim > max(8 * n, 64) and n_rff:
+        if fm.out_dim > max(8 * effective, 64) and n_rff:
             continue
         phi = fm(X) * sqrt_w[:, None]
         target = yc * sqrt_w

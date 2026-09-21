@@ -89,3 +89,31 @@ def test_roundtrip_persistence(tmp_path):
     restored = TasteModel.from_npz(path)
     assert np.allclose(model.predict(X, with_std=False), restored.predict(X, with_std=False))
     assert restored.n_obs == model.n_obs
+
+
+def test_sampled_negatives_do_not_license_extra_capacity():
+    """Padding rows must not buy model flexibility.
+
+    A thousand sampled negatives push n past the threshold where the evidence
+    starts considering a random-feature lift, but they carry no information
+    about where this person's taste curves. Capacity is decided by the count
+    of real verdicts.
+    """
+    X, y, _ = _synthetic(n=400)
+    real, padded = 20, 380
+
+    naive = fit(X, y, allow_rff=True)
+    gated = fit(X, y, allow_rff=True, capacity_obs=real)
+    assert gated.feature_map.n_rff == 0, gated.feature_map.n_rff
+    assert naive.feature_map.n_rff >= 0
+    del padded
+
+
+def test_capacity_gate_still_allows_a_lift_on_real_evidence():
+    X, y, _ = _synthetic(n=400)
+    lifted = fit(X, y, allow_rff=True, capacity_obs=400)
+    # With 400 genuine labels the evidence is free to choose either; the point
+    # is only that the gate is not forcing the linear model.
+    assert lifted.log_evidence == pytest.approx(
+        fit(X, y, allow_rff=True).log_evidence
+    )

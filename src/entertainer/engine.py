@@ -182,13 +182,17 @@ class Engine:
             weights = weights * np.exp(-np.log(2.0) * ages / half_life_days)
         weights = np.maximum(weights, 1e-3)
 
+        real_labels = len(ids)
         if negatives:
             X, rewards, weights = _add_sampled_negatives(
                 fs, X, rewards, weights, known=set(ids.tolist()),
                 count=negatives, seed=seed,
             )
 
-        model = fit_taste(X, rewards, sample_weight=weights, prior=self.prior(con))
+        model = fit_taste(
+            X, rewards, sample_weight=weights, prior=self.prior(con),
+            capacity_obs=real_labels,
+        )
         if save:
             model.to_npz()
         return model

@@ -186,67 +186,84 @@ def _random_elicitation(
 # --- scoring arms -----------------------------------------------------------
 
 
-def _rank(scores: np.ndarray, candidate_rows: np.ndarray, fs: FeatureSpace, k: int) -> list[int]:
-    order = np.argsort(-scores)[:k]
-    return [int(fs.item_ids[candidate_rows[o]]) for o in order]
+def _rank(scores: np.ndarray, keep: np.ndarray, fs: FeatureSpace, k: int) -> list[int]:
+    """Top-k item ids from scores over the *whole* item space.
+
+    Arms score every row and mask afterwards rather than slicing the
+    candidate set first. Slicing looked cheaper and was not: the excluded set
+    is a few dozen titles out of seventy thousand, so `fs.matrix[rows]` copied
+    ~58MB per arm per user — 2,400 copies across a run — to avoid scoring
+    thirty rows. Masking also lets `argpartition` replace a full sort.
+    """
+    masked = np.where(keep, scores, -np.inf)
+    top = np.argpartition(-masked, min(k, len(masked) - 1))[:k]
+    top = top[np.argsort(-masked[top])]
+    return [int(fs.item_ids[o]) for o in top if np.isfinite(masked[o])]
 
 
-def arm_popularity(fs, meta, candidate_rows, answered, k):
-    votes = np.array(
-        [float((meta.get(int(fs.item_ids[r])) or {}).get("imdb_votes") or 0) for r in candidate_rows]
-    )
-    return _rank(votes, candidate_rows, fs, k)
+def arm_popularity(fs, meta, keep, answered, k):
+    return _rank(fs.columns.votes.astype(np.float64), keep, fs, k)
 
 
-def arm_quality(fs, meta, candidate_rows, answered, k):
-    q = np.array(
-        [float((meta.get(int(fs.item_ids[r])) or {}).get("quality") or 0.0) for r in candidate_rows]
-    )
-    return _rank(q, candidate_rows, fs, k)
+def arm_quality(fs, meta, keep, answered, k):
+    return _rank(fs.columns.quality.astype(np.float64), keep, fs, k)
 
 
-def arm_content_centroid(fs, meta, candidate_rows, answered, k):
-    """Cosine to the mean of the user's liked items — the standard naive baseline."""
+def arm_content_centroid(fs, meta, keep, answered, k):
+    """Cosine to the mean of the user's liked items — the standard naive baseline.
+
+    Deliberately not mean-centred; see `arm_weighted_knn`.
+    """
     liked = [i for i, r in answered if r >= 0.7]
     if not liked:
-        return arm_quality(fs, meta, candidate_rows, answered, k)
+        return arm_quality(fs, meta, keep, answered, k)
     centroid = fs.latent[fs.rows_for(liked)].mean(axis=0)
     centroid /= np.linalg.norm(centroid) + 1e-9
-    return _rank(fs.latent[candidate_rows] @ centroid, candidate_rows, fs, k)
+    return _rank(fs.latent @ centroid, keep, fs, k)
 
 
-def arm_weighted_knn(fs, meta, candidate_rows, answered, k, neighbours: int = 30):
+def arm_weighted_knn(fs, meta, keep, answered, k, neighbours: int = 30):
     """Rating-weighted item kNN over the fused space.
 
     Deliberately *not* mean-centred. Centring is the textbook move and it is
     wrong for this data: people rate what they expected to like, so the
     verdicts sit in a narrow band near the top and centring converts "liked
     slightly less" into "disliked". It took this baseline from competitive to
-    NDCG@10 0.007 — worse than random ordering of a plausible shortlist.
+    NDCG@10 0.007 — worse than randomly ordering a plausible shortlist.
     """
     if not answered:
-        return arm_quality(fs, meta, candidate_rows, answered, k)
+        return arm_quality(fs, meta, keep, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
-    sims = fs.latent[candidate_rows] @ fs.latent[fs.rows_for(ids)].T
+    sims = fs.latent @ fs.latent[fs.rows_for(ids)].T
     top = min(neighbours, sims.shape[1])
     idx = np.argpartition(-sims, top - 1, axis=1)[:, :top]
     rows = np.arange(sims.shape[0])[:, None]
     s = np.maximum(sims[rows, idx], 0.0)
-    scores = (s * rewards[idx]).sum(axis=1) / (s.sum(axis=1) + 1e-6)
-    return _rank(scores, candidate_rows, fs, k)
+    # Accumulated, not averaged. Dividing by the similarity mass is the
+    # textbook form and it throws away the only signal left once the rewards
+    # are a narrow band: how strongly this title resembles things the person
+    # liked at all. Normalised, every candidate scored ~0.78 and the ranking
+    # was arbitrary — NDCG@10 0.003.
+    scores = (s * rewards[idx]).sum(axis=1)
+    return _rank(scores, keep, fs, k)
 
 
-def arm_ridge(fs, meta, candidate_rows, answered, k):
-    """Plain ridge regression on the same features: the model minus its Bayes."""
+def arm_ridge(fs, meta, keep, answered, k):
+    """Plain ridge regression on the same features: the model minus its Bayes.
+
+    Given the same sampled negatives, so the comparison isolates the Bayesian
+    treatment rather than re-measuring the contrast those negatives supply.
+    """
     from sklearn.linear_model import RidgeCV
 
     if len(answered) < 3:
-        return arm_quality(fs, meta, candidate_rows, answered, k)
+        return arm_quality(fs, meta, keep, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
-    m = RidgeCV(alphas=(0.1, 1.0, 10.0, 100.0)).fit(fs.vectors_for(ids), rewards)
-    return _rank(m.predict(fs.matrix[candidate_rows]), candidate_rows, fs, k)
+    X, y, w = _with_negatives(fs, ids, rewards)
+    m = RidgeCV(alphas=(0.1, 1.0, 10.0, 100.0)).fit(X, y, sample_weight=w)
+    return _rank(m.predict(fs.matrix), keep, fs, k)
 
 
 NEGATIVE_SAMPLES = 1000
@@ -273,40 +290,40 @@ def _with_negatives(fs, ids, rewards, seed=0):
     return X, y, w
 
 
-def _taste_arm(fs, meta, candidate_rows, answered, k, prior, negatives=True):
+def _taste_arm(fs, meta, keep, answered, k, prior, negatives=True):
     if len(answered) < 3:
-        return arm_quality(fs, meta, candidate_rows, answered, k)
+        return arm_quality(fs, meta, keep, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
     if negatives:
         X, y, w = _with_negatives(fs, ids, rewards)
     else:
         X, y, w = fs.vectors_for(ids), rewards, None
-    model = fit_taste(X, y, sample_weight=w, prior=prior)
-    mean = model.predict(fs.matrix[candidate_rows], with_std=False)
-    return _rank(mean, candidate_rows, fs, k)
-
-
-def arm_taste_flat(fs, meta, candidate_rows, answered, k):
-    """The engine with an isotropic prior: no population knowledge at all."""
-    return _taste_arm(fs, meta, candidate_rows, answered, k, prior=None)
-
-
-def arm_taste_no_negatives(fs, meta, candidate_rows, answered, k):
-    """The engine without sampled negatives: positives-only regression."""
-    return _taste_arm(
-        fs, meta, candidate_rows, answered, k, prior=_ACTIVE_PRIOR, negatives=False
+    model = fit_taste(
+        X, y, sample_weight=w, prior=prior, capacity_obs=len(rewards)
     )
+    mean = model.predict(fs.matrix, with_std=False)
+    return _rank(mean, keep, fs, k)
 
 
-def arm_taste(fs, meta, candidate_rows, answered, k):
+def arm_taste_flat(fs, meta, keep, answered, k):
+    """The engine with an isotropic prior: no population knowledge at all."""
+    return _taste_arm(fs, meta, keep, answered, k, prior=None)
+
+
+def arm_taste_no_negatives(fs, meta, keep, answered, k):
+    """The engine without sampled negatives: positives-only regression."""
+    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR, negatives=False)
+
+
+def arm_taste(fs, meta, keep, answered, k):
     """The engine: evidence-tuned Bayesian posterior over a population prior.
 
     The prior is injected by ``run`` rather than loaded here, so that the
     replay can guarantee it was fitted without the simulated user's own
     opinions in it.
     """
-    return _taste_arm(fs, meta, candidate_rows, answered, k, prior=_ACTIVE_PRIOR)
+    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR)
 
 
 # Set by ``run``; module-level so the arm signature stays uniform.
@@ -385,7 +402,6 @@ def run(
             cand_mask = np.ones(len(fs.item_ids), dtype=bool)
             for i in told:
                 cand_mask[fs.index[i]] = False
-            candidate_rows = np.flatnonzero(cand_mask)
 
             relevance = {i: max(0.0, r - RELEVANT_AT + 1.0) for i, r in held.items() if r >= RELEVANT_AT}
             positives = set(relevance)
@@ -395,7 +411,7 @@ def run(
 
             vectors = {}
             for name in arms:
-                ranked = ARMS[name](fs, meta, candidate_rows, answered, cfg.top_k)
+                ranked = ARMS[name](fs, meta, cand_mask, answered, cfg.top_k)
                 if not vectors:
                     vectors = {i: fs.latent[fs.index[i]] for i in ranked}
                 else:
