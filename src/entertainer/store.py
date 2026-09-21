@@ -182,13 +182,30 @@ def log_event(
     value: float | None = None,
     source: str = "manual",
     context: dict | None = None,
+    ts: str | None = None,
 ) -> None:
+    """Append one event. `ts` backdates it, for verdicts imported elsewhere.
+
+    Chronology is load-bearing: the prequential audit replays events in `ts`
+    order, and the recency half-life weights by age. Stamping an imported
+    two-year-old verdict with `now()` would both scramble the replay and
+    treat it as fresh evidence.
+    """
+    if ts is None:
+        con.execute(
+            """
+            INSERT INTO events
+            SELECT nextval('event_seq'), now(), ?, ?, ?, ?, ?
+            """,
+            [item_id, kind, value, source, json.dumps(context or {})],
+        )
+        return
     con.execute(
         """
         INSERT INTO events
-        SELECT nextval('event_seq'), now(), ?, ?, ?, ?, ?
+        SELECT nextval('event_seq'), CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?
         """,
-        [item_id, kind, value, source, json.dumps(context or {})],
+        [ts, item_id, kind, value, source, json.dumps(context or {})],
     )
 
 

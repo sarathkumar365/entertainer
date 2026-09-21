@@ -204,9 +204,20 @@ class Engine:
 
     # --- recording ---------------------------------------------------------
 
-    def record(self, con, item_id: int, verdict: str, source: str = "manual") -> float:
+    def record(
+        self,
+        con,
+        item_id: int,
+        verdict: str,
+        source: str = "manual",
+        context: dict | None = None,
+        ts: str | None = None,
+    ) -> float:
         reward = verdict_to_reward(verdict)
-        store.log_event(con, item_id, "rate", reward * 10.0, source, {"verdict": verdict})
+        store.log_event(
+            con, item_id, "rate", reward * 10.0, source,
+            {**(context or {}), "verdict": verdict}, ts=ts,
+        )
         return reward
 
     # --- reporting ---------------------------------------------------------

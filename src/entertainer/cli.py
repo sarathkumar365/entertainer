@@ -1630,6 +1630,146 @@ def evaluate(
     console.print(f"[dim]evaluation manifest: {evaluation_manifest['path']}[/dim]")
 
 
+@app.command("netflix")
+def netflix_import(
+    paths: list[Path] = typer.Argument(..., help="Netflix jsonGraph pages, in any order."),
+    apply: bool = typer.Option(False, "--apply", help="Write the confident matches."),
+    review: Path = typer.Option(Path("netflix-review.json"), help="Where to put everything else."),
+    decisions: Path = typer.Option(None, help="Rulings for the ambiguous titles, keyed by Netflix id."),
+    place: bool = typer.Option(True, help="Embed new titles into the item space (needs the encoder)."),
+    replace: bool = typer.Option(False, help="Clear previously imported Netflix verdicts first."),
+) -> None:
+    """Import a Netflix thumbs history, resolving titles against TMDB.
+
+    Netflix's internal `movieID` maps to nothing public, so titles have to be
+    matched by text. That is ambiguous, and attaching a verdict to the wrong
+    film is worse than not importing it, so only unambiguous matches are
+    written. The rest land in a review file with their candidates.
+
+    Runs as a dry run unless `--apply` is given.
+    """
+    from .data import netflix
+    from .ingest import IngestError, add_title
+
+    _require_catalog()
+
+    ratings: list[netflix.Rating] = []
+    for path in paths:
+        ratings.extend(netflix.parse(path))
+    if not ratings:
+        _fail("no rating items found in those files")
+
+    # Netflix pages overlap when they are grabbed by hand. Later pages are
+    # older, so the first occurrence of a title is the most recent verdict.
+    seen: set[tuple[str, int | None]] = set()
+    unique: list[netflix.Rating] = []
+    for rating in ratings:
+        key = (netflix.normalise(rating.title), rating.netflix_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(rating)
+    if len(unique) != len(ratings):
+        console.print(f"[dim]{len(ratings) - len(unique)} duplicate rows dropped[/dim]")
+
+    with console.status(f"resolving {len(unique)} titles against TMDB..."):
+        resolutions = netflix.flag_collisions(netflix.resolve(unique))
+    if decisions:
+        resolutions = netflix.apply_decisions(
+            resolutions, json.loads(decisions.read_text(encoding="utf-8"))
+        )
+
+    buckets: dict[str, list[netflix.Resolution]] = {}
+    for res in resolutions:
+        buckets.setdefault(res.confidence, []).append(res)
+
+    table = Table(title="Netflix import")
+    table.add_column("confidence")
+    table.add_column("n", justify="right")
+    table.add_column("what happens")
+    for name, note in (
+        ("high", "written" if apply else "would be written"),
+        ("ambiguous", "sent to review — several films share the title"),
+        ("low", "sent to review — no exact title match"),
+        ("unresolvable", "skipped — Netflix exported no title"),
+        ("skipped", "skipped — ruled out by hand"),
+    ):
+        if buckets.get(name):
+            table.add_row(name, str(len(buckets[name])), note)
+    console.print(table)
+
+    needs_eyes = [r for r in resolutions if r.confidence not in ("high", "skipped")]
+    if needs_eyes:
+        review.write_text(
+            json.dumps(
+                [
+                    {
+                        "title": r.rating.title,
+                        "thumbs": r.rating.thumbs,
+                        "verdict": r.rating.verdict,
+                        "netflix_id": r.rating.netflix_id,
+                        "rated_on": str(r.rating.rated_on) if r.rating.rated_on else None,
+                        "confidence": r.confidence,
+                        "reason": r.reason,
+                        "best_guess": r.match,
+                        "alternatives": r.alternatives,
+                    }
+                    for r in needs_eyes
+                ],
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        console.print(f"[yellow]{len(needs_eyes)} need a human -> {review}[/yellow]")
+
+    confident = buckets.get("high", [])
+    if not apply:
+        for res in confident[:10]:
+            m = res.match or {}
+            console.print(
+                f"  [dim]{res.rating.verdict:<7}[/dim] {m.get('title')} "
+                f"({m.get('year')}) [dim]{m.get('language')}[/dim]"
+            )
+        if len(confident) > 10:
+            console.print(f"  [dim]... and {len(confident) - 10} more[/dim]")
+        console.print("\n[bold]dry run.[/bold] re-run with [cyan]--apply[/cyan] to write these.")
+        return
+
+    if replace:
+        # Re-running after settling the ambiguous titles would otherwise stack
+        # a second verdict on every title the first pass already wrote. The
+        # latest verdict wins, so nothing breaks, but the duplicates distort
+        # the prequential replay, which walks the log in order.
+        with store.session() as con:
+            cleared = con.execute(
+                "SELECT count(*) FROM events WHERE source = 'netflix'"
+            ).fetchone()[0]
+            con.execute("DELETE FROM events WHERE source = 'netflix'")
+        console.print(f"[dim]cleared {cleared} previously imported Netflix verdicts[/dim]")
+
+    engine = Engine()
+    written, failed = 0, 0
+    for res in confident:
+        m = res.match or {}
+        try:
+            item_id, _ = add_title(engine, int(m["tmdb_id"]), m["kind"], place=place)
+        except (IngestError, KeyError, TypeError) as exc:
+            console.print(f"[yellow]skipped {res.rating.title}: {exc}[/yellow]")
+            failed += 1
+            continue
+        with store.session() as con:
+            engine.record(
+                con, item_id, res.rating.verdict, source="netflix",
+                context={"netflix_id": res.rating.netflix_id},
+                ts=str(res.rating.rated_on) if res.rating.rated_on else None,
+            )
+        written += 1
+
+    console.print(f"[green]wrote {written} verdicts[/green]" + (f", [yellow]{failed} failed[/yellow]" if failed else ""))
+    console.print("\n[bold]next:[/bold] [cyan]ent taste[/cyan] then [cyan]ent audit[/cyan]")
+
+
 def main() -> None:  # pragma: no cover
     try:
         app()

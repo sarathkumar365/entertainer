@@ -42,6 +42,17 @@ general principle.
 - A handicapped baseline manufactures a win: giving ridge the sampled negatives and fixing kNN's normalisation erased an apparent significant victory entirely — fix the baselines before believing the result, not after.
 - Keep the losing runs. The flattering one is the one that gets quoted, so the record has to contain the corrections beside it.
 
+## External rating imports
+
+- Netflix's exported `movieID` maps to nothing public, so a thumbs history can only be joined on title text, and title text is ambiguous: `Hunger`, `Alpha`, `Youth`, `Sahara` and `Extinction` each name several unrelated films.
+- TMDB popularity is recency-weighted, so a 2026 release with 29 votes outranks the 1989 film actually watched — rank exact-title collisions on vote count, or better, refuse to rank them at all.
+- `watch/providers` looked like decisive evidence that a candidate was the Netflix one, and is not: it reports *current* availability, and both test cases had already left Netflix. Verify a disambiguator before building on it.
+- Grading matches (`high` / `ambiguous` / `low`) and writing only the unambiguous ones caught the two the heuristic would have got wrong; the user confirmed one of them unprompted.
+- Two source rows can resolve to one film: Netflix lists the Chinese and Korean `A Love So Beautiful` separately with opposite verdicts, and writing both would put contradictory labels on a single catalogue row. Detect the collision rather than letting last-write win.
+- Imported verdicts must carry their original timestamp. `now()` scrambles the prequential replay, which walks the log in `ts` order, and hands a two-year-old opinion full recency weight.
+- Record human rulings in a file keyed by source id, not in a throwaway script: the next page of the same export then re-imports identically.
+- Ask. Thirty-nine ambiguous titles were settled by the user in four rounds of questions, faster and more accurately than any amount of heuristic tuning would have managed.
+
 ## Process
 
 - Session teardown kills the whole process group, `setsid` included in some cases — long jobs need a stable log path outside session-scoped directories, and resumability rather than trust.
