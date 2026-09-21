@@ -32,11 +32,40 @@ SIDE_FEATURE_NAMES = (
 
 
 @dataclass
+class Columns:
+    """Catalogue metadata as parallel arrays, for vectorised filtering.
+
+    Filtering and pool selection both used to walk a 270,000-entry dict in
+    Python on every command, which is about a second of latency on something
+    that should feel instant. The same facts as columns cost microseconds.
+
+    Languages are held as integer codes against a vocabulary rather than as
+    strings, so a language filter is an integer comparison rather than 270,000
+    string comparisons.
+    """
+
+    language_code: np.ndarray    # (N,) int32 index into `languages`
+    languages: list[str]
+    is_tv: np.ndarray            # (N,) bool
+    year: np.ndarray             # (N,) int32, 0 where unknown
+    runtime: np.ndarray          # (N,) int32, 0 where unknown
+    votes: np.ndarray            # (N,) int64, 0 where unknown
+    quality: np.ndarray          # (N,) float32
+    known: np.ndarray            # (N,) bool — present in the catalogue at all
+
+    def codes_for(self, wanted) -> np.ndarray:
+        """Language codes for a set of language strings; -1 entries dropped."""
+        lookup = {name: i for i, name in enumerate(self.languages)}
+        return np.array([lookup[w] for w in wanted if w in lookup], dtype=np.int32)
+
+
+@dataclass
 class FeatureSpace:
     item_ids: np.ndarray     # (N,)
     latent: np.ndarray       # (N, D) fused PCA space, unit rows
     side: np.ndarray         # (N, E) standardised side features
     index: dict[int, int]    # item_id -> row
+    columns: Columns | None = None
     _matrix: np.ndarray | None = None
 
     @property
@@ -120,9 +149,48 @@ def build(
         ]
     ).astype(np.float32)
 
+    languages: list[str] = []
+    lang_lookup: dict[str, int] = {}
+    language_code = np.full(n, -1, dtype=np.int32)
+    known = np.zeros(n, dtype=bool)
+    year_col = np.zeros(n, dtype=np.int32)
+    runtime_col = np.zeros(n, dtype=np.int32)
+    votes_col = np.zeros(n, dtype=np.int64)
+
+    for i, iid in enumerate(item_ids.tolist()):
+        r = meta.get(int(iid))
+        if not r:
+            continue
+        known[i] = True
+        lang = r.get("language") or "xx"
+        code = lang_lookup.get(lang)
+        if code is None:
+            code = len(languages)
+            lang_lookup[lang] = code
+            languages.append(lang)
+        language_code[i] = code
+        if r.get("year"):
+            year_col[i] = int(r["year"])
+        if r.get("runtime"):
+            runtime_col[i] = int(r["runtime"])
+        if r.get("imdb_votes"):
+            votes_col[i] = int(r["imdb_votes"])
+
+    columns = Columns(
+        language_code=language_code,
+        languages=languages,
+        is_tv=is_tv.astype(bool),
+        year=year_col,
+        runtime=runtime_col,
+        votes=votes_col,
+        quality=np.nan_to_num(quality, nan=0.5).astype(np.float32),
+        known=known,
+    )
+
     return FeatureSpace(
         item_ids=item_ids.astype(np.int32),
         latent=latent.astype(np.float32),
         side=side,
         index={int(v): i for i, v in enumerate(item_ids.tolist())},
+        columns=columns,
     )

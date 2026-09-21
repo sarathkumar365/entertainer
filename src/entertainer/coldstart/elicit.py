@@ -69,36 +69,35 @@ def recognisable_pool(
     per_language_cap: int | None = None,
 ) -> np.ndarray:
     """Row indices of titles a person plausibly has an opinion about."""
-    wanted = set(languages) if languages else None
-    by_lang: dict[str, list[tuple[float, int]]] = {}
-    for row, iid in enumerate(fs.item_ids.tolist()):
-        r = meta.get(int(iid))
-        if not r:
-            continue
-        lang = r.get("language") or "xx"
-        if wanted and lang not in wanted:
-            continue
-        votes = float(r.get("imdb_votes") or 0)
-        if votes <= 0:
-            continue
-        by_lang.setdefault(lang, []).append((votes, row))
+    cols = fs.columns
+    if cols is None:  # pragma: no cover - only for hand-built spaces
+        raise RuntimeError("feature space has no metadata columns")
 
-    keep: list[int] = []
-    for lang, entries in by_lang.items():
-        if len(entries) < MIN_TITLES_PER_LANGUAGE:
+    eligible = cols.known & (cols.votes > 0)
+    if languages:
+        codes = cols.codes_for(languages)
+        eligible &= np.isin(cols.language_code, codes) if codes.size else False
+
+    keep: list[np.ndarray] = []
+    for code, lang in enumerate(cols.languages):
+        rows = np.flatnonzero(eligible & (cols.language_code == code))
+        if rows.size < MIN_TITLES_PER_LANGUAGE:
             continue
-        entries.sort(key=lambda e: -e[0])
-        votes = np.array([e[0] for e in entries])
+        votes = cols.votes[rows]
+        order = rows[np.argsort(-votes)]
         floor = float(np.quantile(votes, quantile))
-        picked = [row for v, row in entries if v >= floor]
+        picked = order[cols.votes[order] >= floor]
         # Top up small catalogues: better to ask about a moderately known
         # Kannada film than about no Kannada film.
-        if len(picked) < MIN_POOL_PER_LANGUAGE:
-            picked = [row for _, row in entries[:MIN_POOL_PER_LANGUAGE]]
+        if picked.size < MIN_POOL_PER_LANGUAGE:
+            picked = order[:MIN_POOL_PER_LANGUAGE]
         # Languages the user named get more room in the question budget.
         cap = per_language_cap or (1200 if lang in PRIORITY_LANGUAGES else 400)
-        keep.extend(picked[:cap])
-    return np.array(sorted(set(keep)), dtype=np.int64)
+        keep.append(picked[:cap])
+
+    if not keep:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(np.concatenate(keep)).astype(np.int64)
 
 
 def greedy_dpp(

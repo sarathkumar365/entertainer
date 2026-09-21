@@ -494,3 +494,66 @@ def test_mood_leaves_hard_filters_alone(world):
     )
     assert picks
     assert all(meta[p.item_id]["language"] == "ml" for p in picks)
+
+
+def test_filtering_is_vectorised_and_agrees_with_the_obvious_loop(world):
+    """The fast mask must match a naive implementation exactly."""
+    fs, meta = world["fs"], world["meta"]
+    cases = [
+        Filters(),
+        Filters(languages=("ml",)),
+        Filters(languages=("ml", "ko")),
+        Filters(kind="movie"),
+        Filters(kind="tv"),
+        Filters(min_year=2000),
+        Filters(max_year=1995),
+        Filters(min_runtime=120),
+        Filters(max_runtime=100),
+        Filters(min_votes=50_000),
+        Filters(languages=("ta",), kind="movie", min_year=1990, max_runtime=150),
+        Filters(exclude=frozenset({0, 5, 9, 500})),
+        Filters(languages=("nonexistent",)),
+    ]
+    for f in cases:
+        fast = f.mask(fs)
+        naive = np.ones(len(fs.item_ids), dtype=bool)
+        for i, iid in enumerate(fs.item_ids.tolist()):
+            r = meta.get(int(iid))
+            ok = r is not None
+            if ok and int(iid) in f.exclude:
+                ok = False
+            if ok and f.languages and r.get("language") not in f.languages:
+                ok = False
+            if ok and f.kind and r.get("kind") != f.kind:
+                ok = False
+            if ok and f.min_year and (r.get("year") or 0) < f.min_year:
+                ok = False
+            if ok and f.max_year and not (0 < (r.get("year") or 0) <= f.max_year):
+                ok = False
+            if ok and f.max_runtime and not (0 < (r.get("runtime") or 0) <= f.max_runtime):
+                ok = False
+            if ok and f.min_runtime and (r.get("runtime") or 0) < f.min_runtime:
+                ok = False
+            if ok and f.min_votes and (r.get("imdb_votes") or 0) < f.min_votes:
+                ok = False
+            naive[i] = ok
+        assert np.array_equal(fast, naive), f
+
+
+def test_an_unknown_runtime_fails_a_runtime_constraint(world):
+    """A hard constraint must never be relaxed for missing data."""
+    from entertainer.models.features import build as build_features
+
+    rng = np.random.default_rng(0)
+    latent = rng.normal(size=(4, 8)).astype(np.float32)
+    latent /= np.linalg.norm(latent, axis=1, keepdims=True)
+    ids = np.arange(4, dtype=np.int32)
+    meta = {
+        0: {"language": "en", "kind": "movie", "runtime": 90, "imdb_votes": 10},
+        1: {"language": "en", "kind": "movie", "imdb_votes": 10},        # no runtime
+        2: {"language": "en", "kind": "movie", "runtime": 200, "imdb_votes": 10},
+        3: {"language": "en", "kind": "movie", "runtime": 95, "imdb_votes": 10},
+    }
+    fs = build_features(ids, latent, meta)
+    keep = Filters(max_runtime=100).mask(fs)
+    assert list(keep) == [True, False, False, True]

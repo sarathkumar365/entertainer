@@ -46,20 +46,43 @@ class Filters:
     min_votes: int | None = None
     exclude: frozenset[int] = frozenset()
 
-    def mask(self, item_ids: np.ndarray, meta: dict[int, dict]) -> np.ndarray:
-        keep = np.ones(len(item_ids), dtype=bool)
-        langs = set(self.languages)
-        for i, iid in enumerate(item_ids.tolist()):
-            iid = int(iid)
-            if iid in self.exclude:
-                keep[i] = False
-                continue
-            r = meta.get(iid)
-            if r is None:
-                keep[i] = False
-                continue
-            if langs and (r.get("language") not in langs) or self.kind and r.get("kind") != self.kind or self.min_year and (r.get("year") or 0) < self.min_year or self.max_year and (r.get("year") or 9999) > self.max_year or self.max_runtime and (r.get("runtime") or 0) > self.max_runtime or self.min_runtime and (r.get("runtime") or 0) < self.min_runtime or self.min_votes and (r.get("imdb_votes") or 0) < self.min_votes:
-                keep[i] = False
+    def mask(self, fs: FeatureSpace) -> np.ndarray:
+        """Boolean keep-mask over the item space.
+
+        Vectorised over the precomputed metadata columns. The dict-walking
+        version cost roughly a second per command at catalogue scale, which
+        was most of the latency a user would have felt on `ent recs`.
+
+        Unknown values fail a constraint rather than passing it: if a title's
+        runtime is not recorded, "under two hours" cannot be honoured for it,
+        and a hard constraint must never be quietly relaxed.
+        """
+        cols = fs.columns
+        if cols is None:  # pragma: no cover - only for hand-built spaces
+            raise RuntimeError("feature space has no metadata columns")
+
+        keep = cols.known.copy()
+
+        if self.exclude:
+            excluded = np.fromiter(self.exclude, dtype=np.int64, count=len(self.exclude))
+            keep &= ~np.isin(fs.item_ids, excluded)
+        if self.languages:
+            codes = cols.codes_for(self.languages)
+            keep &= np.isin(cols.language_code, codes) if codes.size else np.False_
+        if self.kind == "tv":
+            keep &= cols.is_tv
+        elif self.kind == "movie":
+            keep &= ~cols.is_tv
+        if self.min_year:
+            keep &= cols.year >= self.min_year
+        if self.max_year:
+            keep &= (cols.year <= self.max_year) & (cols.year > 0)
+        if self.max_runtime:
+            keep &= (cols.runtime <= self.max_runtime) & (cols.runtime > 0)
+        if self.min_runtime:
+            keep &= cols.runtime >= self.min_runtime
+        if self.min_votes:
+            keep &= cols.votes >= self.min_votes
         return keep
 
 
@@ -165,8 +188,7 @@ def recommend(
     rng = rng or np.random.default_rng()
     filters = filters or Filters()
 
-    mask = filters.mask(fs.item_ids, meta)
-    idx = np.flatnonzero(mask)
+    idx = np.flatnonzero(filters.mask(fs))
     if idx.size == 0:
         return []
 
