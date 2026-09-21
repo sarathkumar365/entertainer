@@ -155,21 +155,21 @@ def setup(
 
     if not skip_enrich and has_tmdb():
         console.rule("[bold]3/8 enriching from TMDB")
-        data_enrich(limit=enrich_limit or None, keywords=False)
-        data_keywords()
+        data_enrich(limit=enrich_limit or None, concurrency=40, keywords=False)
+        data_keywords(top=150_000, concurrency=40)
     else:
         console.rule("[bold]3/8 TMDB enrichment skipped")
 
     console.rule("[bold]4/8 pruning by language")
-    data_prune(scale=floor_scale)
+    data_prune(scale=floor_scale, dry_run=False)
     console.rule("[bold]5/8 encoding item text")
-    data_embed()
+    data_embed(batch_size=64, limit=None, fresh=False)
     console.rule("[bold]6/8 factorising MovieLens")
-    data_cf()
+    data_cf(factors=192, iterations=20, holdout=2_000, signal="watched")
     console.rule("[bold]7/8 fusing item space")
-    data_fuse()
+    data_fuse(dim=192)
     console.rule("[bold]8/8 learning the population prior")
-    data_prior()
+    data_prior(max_users=20_000, shrinkage=0.15)
 
     with store.session(read_only=True) as con:
         counts = store.counts(con)

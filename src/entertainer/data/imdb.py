@@ -165,18 +165,22 @@ def build(min_votes: int = 50) -> pl.DataFrame:
     language you have guessed wrong is worse than not filtering at all.
     """
     base = _basics().join(_ratings(), on="tconst", how="left")
-    joined = base.filter(pl.col("imdb_votes") >= min_votes)
+    # Keep this key-only frame separate from the progressively enriched frame.
+    # Passing ``joined`` below makes every later lookup re-run all prior
+    # 50–95M-row joins merely to obtain its tconst values.
+    keep = base.filter(pl.col("imdb_votes") >= min_votes)
+    joined = keep
 
     if available("title.akas.tsv.gz"):
         console.print("[dim]resolving release regions from title.akas (50M rows)…[/dim]")
-        joined = joined.join(_countries(joined), on="tconst", how="left")
+        joined = joined.join(_countries(keep), on="tconst", how="left")
     else:
         console.print("[yellow]title.akas missing — no release regions[/yellow]")
         joined = joined.with_columns(countries=pl.lit(None, dtype=pl.List(pl.Utf8)))
 
     if available("title.crew.tsv.gz") and available("name.basics.tsv.gz"):
         console.print("[dim]resolving crew from title.crew…[/dim]")
-        joined = joined.join(_crew(joined), on="tconst", how="left")
+        joined = joined.join(_crew(keep), on="tconst", how="left")
     else:
         console.print("[yellow]title.crew missing — no director or writer credits[/yellow]")
         joined = joined.with_columns(
@@ -186,7 +190,7 @@ def build(min_votes: int = 50) -> pl.DataFrame:
 
     if available("title.principals.tsv.gz") and available("name.basics.tsv.gz"):
         console.print("[dim]resolving cast from title.principals (95M rows)…[/dim]")
-        joined = joined.join(_cast(joined), on="tconst", how="left")
+        joined = joined.join(_cast(keep), on="tconst", how="left")
     else:
         console.print("[yellow]title.principals missing — no cast[/yellow]")
         joined = joined.with_columns(cast_names=pl.lit(None, dtype=pl.List(pl.Utf8)))
