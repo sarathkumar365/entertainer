@@ -117,3 +117,54 @@ def test_capacity_gate_still_allows_a_lift_on_real_evidence():
     assert lifted.log_evidence == pytest.approx(
         fit(X, y, allow_rff=True).log_evidence
     )
+
+
+def test_pinned_penalty_behaves_like_ridge_with_that_alpha():
+    """With the penalty fixed, this is ridge — so it should match one."""
+    from sklearn.linear_model import Ridge
+
+    X, y, _ = _synthetic(n=120, d=16)
+    model = fit(X, y, allow_rff=False, penalty=5.0)
+    ridge = Ridge(alpha=5.0).fit(X, y)
+
+    ours = model.predict(X, with_std=False)
+    theirs = ridge.predict(X)
+    # Same estimator, same penalty: rankings must agree closely.
+    assert np.corrcoef(ours, theirs)[0, 1] > 0.999
+
+
+def test_pinned_penalty_resists_padding_that_fools_empirical_bayes():
+    """The failure the pin exists to prevent.
+
+    A thousand identical pseudo-negatives are trivially easy to fit, so the
+    inferred noise precision comes out high and the effective penalty comes
+    out far too weak. Pinning it makes the fit insensitive to how much
+    constant padding is present.
+    """
+    rng = np.random.default_rng(0)
+    X, y, _ = _synthetic(n=40, d=16)
+
+    def effective(n_pad, penalty):
+        pad = rng.normal(size=(n_pad, 16))
+        pad /= np.linalg.norm(pad, axis=1, keepdims=True)
+        Xa = np.vstack([X, pad])
+        ya = np.concatenate([y, np.full(n_pad, 0.15)])
+        m = fit(Xa, ya, allow_rff=False, penalty=penalty, capacity_obs=len(y))
+        return m.alpha / m.beta
+
+    inferred = [effective(n, None) for n in (100, 1000)]
+    pinned = [effective(n, 10.0) for n in (100, 1000)]
+
+    # Inferred regularisation drifts with the amount of padding...
+    assert max(inferred) / min(inferred) > 1.5, inferred
+    # ...pinned does not.
+    assert pinned[0] == pytest.approx(pinned[1], rel=1e-6), pinned
+    assert pinned[0] == pytest.approx(10.0, rel=1e-6)
+
+
+def test_penalty_none_restores_pure_empirical_bayes():
+    X, y, _ = _synthetic(n=80)
+    free = fit(X, y, allow_rff=False, penalty=None)
+    pinned = fit(X, y, allow_rff=False, penalty=10.0)
+    assert not np.isclose(free.alpha / free.beta, 10.0)
+    assert pinned.alpha / pinned.beta == pytest.approx(10.0, rel=1e-6)

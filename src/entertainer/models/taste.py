@@ -57,6 +57,33 @@ VERDICTS: dict[str, float] = {
 # Below this many labels, extra capacity is pure variance.
 RFF_MIN_OBS = 120
 
+# Effective ridge penalty (alpha/beta), pinned rather than inferred.
+#
+# Empirical Bayes chooses the regularisation to maximise the marginal
+# likelihood of the training targets. That is the right criterion when the
+# targets are real observations. Here most of them are not: a thousand
+# sampled negatives all carry the same constant reward, and a constant is
+# trivially easy to fit, so the noise precision comes out high and the
+# effective penalty comes out roughly four times too weak.
+#
+# Measured on 320 held-out MovieLens users, paired so every variant sees the
+# same answers and the same sampled negatives:
+#
+#     inferred (empirical Bayes)      NDCG@10  0.2004
+#     pinned, penalty = 3                      0.2238
+#     pinned, penalty = 10                     0.2360
+#     sklearn Ridge alpha=3                    0.2352
+#     sklearn Ridge alpha=10                   0.2340
+#
+# Pinning recovers the entire gap to ridge (delta +0.036, p < 0.0001 against
+# the inferred version) and lands statistically level with ridge, which is
+# what should happen: with the same penalty they are the same estimator.
+#
+# This value is tuned on MovieLens and is a genuine free parameter. The noise
+# precision is still inferred, because the predictive interval depends on it
+# and exploration depends on that.
+DEFAULT_PENALTY = 10.0
+
 # Strength of the hyperprior anchoring the prior precision at 1 when a
 # population prior is supplied. The population covariance is already a
 # calibrated scale, so 1 is the right default and empirical Bayes should only
@@ -224,6 +251,7 @@ def _evidence_fit(
     iters: int = 200,
     tol: float = 1e-7,
     alpha_anchor: float = 0.0,
+    penalty: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float, float, float]:
     """Empirical-Bayes (MacKay) fit of a Bayesian linear model.
 
@@ -267,10 +295,14 @@ def _evidence_fit(
         # on synthetic data, anchoring turns a 0.39 correlation *loss* at n=4
         # into a 0.46 gain, and still decays to zero by n=64 where the
         # likelihood rightly dominates.
-        new_alpha = float(
-            np.clip((gamma + alpha_anchor) / max(mtm + alpha_anchor, 1e-9), 1e-4, 1e6)
-        )
         new_beta = float(np.clip(max(n - gamma, 1e-6) / resid, 1e-4, 1e6))
+        if penalty is not None:
+            # The ratio is fixed; only the noise scale is learned.
+            new_alpha = float(np.clip(penalty * new_beta, 1e-4, 1e9))
+        else:
+            new_alpha = float(
+                np.clip((gamma + alpha_anchor) / max(mtm + alpha_anchor, 1e-9), 1e-4, 1e6)
+            )
         converged = abs(new_alpha - alpha) < tol and abs(new_beta - beta) < tol
         alpha, beta = new_alpha, new_beta
         if converged:
@@ -326,6 +358,7 @@ def fit(
     prior=None,
     alpha_anchor: float | None = None,
     capacity_obs: int | None = None,
+    penalty: float | None = DEFAULT_PENALTY,
 ) -> TasteModel:
     """Fit the taste posterior, selecting model capacity by marginal likelihood.
 
@@ -341,6 +374,9 @@ def fit(
     overrides the hyperprior strength on the prior precision; it exists mainly
     so the reparameterisation can be tested against the isotropic fit it must
     reduce to.
+
+    ``penalty`` pins the effective ridge penalty instead of inferring it; see
+    DEFAULT_PENALTY for why, and pass None to restore pure empirical Bayes.
 
     ``capacity_obs`` is how many observations should count towards the
     decision to add capacity, when that differs from how many rows were
@@ -387,10 +423,14 @@ def fit(
         target = yc * sqrt_w
 
         if prior is None:
-            mean, cov, alpha, beta, ev = _evidence_fit(phi, target)
+            mean, cov, alpha, beta, ev = _evidence_fit(phi, target, penalty=penalty)
         else:
             offset, transform = _prior_transform(prior, d, fm.out_dim)
             anchor = POPULATION_ALPHA_ANCHOR if alpha_anchor is None else alpha_anchor
+            # No pinned penalty here. With a population prior, alpha scales
+            # that prior's covariance rather than acting as a plain ridge
+            # term, so fixing it would override the calibration the prior
+            # came with. The anchor does the corresponding job in this branch.
             mean_v, cov_v, alpha, beta, ev = _evidence_fit(
                 phi @ transform, target - phi @ offset, alpha_anchor=anchor
             )

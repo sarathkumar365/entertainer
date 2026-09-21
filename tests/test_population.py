@@ -51,9 +51,10 @@ def test_identity_prior_reproduces_the_isotropic_fit():
     identity = PopulationPrior(
         mean=np.zeros(d), cov=np.eye(d), n_users=0, dim=d
     )
-    plain = fit(X[:60], y[:60], allow_rff=False)
-    # With the hyperprior switched off, an identity population prior is a
-    # no-op and must reproduce the isotropic fit exactly.
+    # Both sides with pure empirical Bayes: the pinned penalty applies only
+    # to the isotropic branch, so it has to be switched off here for the
+    # reparameterisation to be comparable at all.
+    plain = fit(X[:60], y[:60], allow_rff=False, penalty=None)
     reparam = fit(X[:60], y[:60], allow_rff=False, prior=identity, alpha_anchor=0.0)
 
     assert np.allclose(plain.mean, reparam.mean, atol=1e-8)
@@ -109,7 +110,10 @@ def test_population_prior_helps_most_when_evidence_is_scarce():
             held = np.setdiff1d(np.arange(len(X)), train)
 
             a = fit(X[train], truth[train], allow_rff=False, prior=prior)
-            b = fit(X[train], truth[train], allow_rff=False)
+            # Compared against pure empirical Bayes, which is what the prior
+            # replaces. The pinned penalty is a separate, later change and
+            # measuring both at once would confound them.
+            b = fit(X[train], truth[train], allow_rff=False, penalty=None)
             with_prior.append(
                 np.corrcoef(a.predict(X[held], with_std=False), truth[held])[0, 1]
             )
