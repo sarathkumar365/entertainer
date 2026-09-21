@@ -48,7 +48,13 @@ CREATE TABLE IF NOT EXISTS titles (
     poster_path       VARCHAR,
     adult             BOOLEAN,
     quality           DOUBLE,           -- shrunk quality prior, see scoring.py
-    enriched_at       TIMESTAMP
+    enriched_at       TIMESTAMP,
+    -- When the keyword pass last ran for this title. Distinct from
+    -- `keywords` being empty: TMDB genuinely has no keywords for a large
+    -- part of the catalogue, and without this marker those titles are
+    -- indistinguishable from unfetched ones and get re-requested on every
+    -- run, forever.
+    keywords_at       TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -83,11 +89,21 @@ CREATE SEQUENCE IF NOT EXISTS impression_seq START 1;
 """
 
 
+# Columns added after the first release. DuckDB has no migration framework,
+# and a catalogue takes hours to rebuild, so schema changes are applied in
+# place and idempotently rather than by asking anyone to start over.
+MIGRATIONS = (
+    "ALTER TABLE titles ADD COLUMN IF NOT EXISTS keywords_at TIMESTAMP",
+)
+
+
 def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     PATHS.ensure()
     con = duckdb.connect(str(PATHS.catalog_db), read_only=read_only)
     if not read_only:
         con.execute(SCHEMA)
+        for statement in MIGRATIONS:
+            con.execute(statement)
     return con
 
 

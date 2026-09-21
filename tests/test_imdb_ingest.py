@@ -375,3 +375,142 @@ def test_shrinkage_protects_against_tiny_vote_counts(mini_dumps):
     assert canonical > enthusiastic, (canonical, enthusiastic)
     assert shrink_rating(None, 100, 6.4) is None
     assert shrink_rating(8.0, 0, 6.4) is None
+
+
+def test_keyword_fetch_marker_survives_an_empty_result(mini_dumps, tmp_path, monkeypatch):
+    """"TMDB has no keywords for this" is a result, not a failure to fetch.
+
+    Without a separate marker, a title whose keyword list comes back empty is
+    indistinguishable from one never requested, and gets re-requested on every
+    run forever. A large part of the catalogue is in exactly that state.
+    """
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "kw.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    catalog.build_base(min_votes=100)
+
+    con = store.connect()
+    con.execute("UPDATE titles SET tmdb_id = item_id + 1000")
+    # One title fetched and found to have none; one never fetched.
+    con.execute("UPDATE titles SET keywords = [], keywords_at = now() WHERE imdb_id = 'tt01'")
+    con.execute("UPDATE titles SET keywords = NULL WHERE imdb_id = 'tt02'")
+
+    pending = {
+        r[0]
+        for r in con.execute(
+            "SELECT imdb_id FROM titles WHERE tmdb_id IS NOT NULL AND keywords_at IS NULL"
+        ).fetchall()
+    }
+    con.close()
+
+    assert "tt01" not in pending, "an empty-but-fetched title must not be re-requested"
+    assert "tt02" in pending
+
+
+def test_rebuild_preserves_the_keyword_marker(mini_dumps, tmp_path, monkeypatch):
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "kw2.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    catalog.build_base(min_votes=100)
+
+    con = store.connect()
+    con.execute(
+        "UPDATE titles SET keywords = [], keywords_at = now(), enriched_at = now() "
+        "WHERE imdb_id = 'tt01'"
+    )
+    con.close()
+
+    catalog.build_base(min_votes=100)
+
+    con = store.connect(read_only=True)
+    marker = con.execute(
+        "SELECT keywords_at FROM titles WHERE imdb_id = 'tt01'"
+    ).fetchone()[0]
+    con.close()
+    assert marker is not None, "a rebuild must not schedule 150k keyword requests again"
+
+
+def test_enrichment_does_not_clobber_fetched_keywords(mini_dumps, tmp_path, monkeypatch):
+    """The enrichment pass runs with keywords disabled; it must not erase them."""
+    from dataclasses import dataclass, field
+
+    from entertainer import store
+    from entertainer.data import catalog
+
+    class P:
+        raw = tmp_path / "raw"
+        root = tmp_path
+        interim = tmp_path / "i"
+        embeddings = tmp_path / "e"
+        artifacts = tmp_path / "a"
+        reports = tmp_path / "r"
+        catalog_db = tmp_path / "kw3.duckdb"
+
+        @classmethod
+        def ensure(cls):
+            for p in (cls.raw, cls.interim, cls.embeddings, cls.artifacts, cls.reports):
+                p.mkdir(parents=True, exist_ok=True)
+            return cls
+
+    monkeypatch.setattr(store, "PATHS", P)
+    monkeypatch.setattr(catalog, "PATHS", P)
+    catalog.build_base(min_votes=100)
+
+    con = store.connect()
+    con.execute("UPDATE titles SET keywords = ['brothers', 'kerala'] WHERE imdb_id = 'tt01'")
+
+    @dataclass
+    class Result:
+        imdb_id: str
+        tmdb_id: int = 1
+        overview: str | None = "New synopsis."
+        tagline: str | None = None
+        original_language: str | None = "ml"
+        popularity: float | None = 1.0
+        tmdb_rating: float | None = 7.0
+        tmdb_votes: int | None = 100
+        poster_path: str | None = None
+        keywords: list = field(default_factory=list)
+        genres: list = field(default_factory=list)
+
+    catalog.apply_enrichment(con, [Result(imdb_id="tt01")])
+    kws = con.execute("SELECT keywords FROM titles WHERE imdb_id = 'tt01'").fetchone()[0]
+    overview = con.execute("SELECT overview FROM titles WHERE imdb_id = 'tt01'").fetchone()[0]
+    con.close()
+
+    assert list(kws) == ["brothers", "kerala"], kws
+    assert overview == "New synopsis."

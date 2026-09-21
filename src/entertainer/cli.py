@@ -247,7 +247,9 @@ def data_enrich(
 
 @data_app.command("keywords")
 def data_keywords(
-    top: int = typer.Option(120_000, help="Backfill the N most-voted titles that still lack keywords."),
+    top: int = typer.Option(
+        150_000, help="Ensure the N most-voted titles have keywords. Idempotent."
+    ),
     concurrency: int = typer.Option(40),
 ) -> None:
     """Backfill TMDB keywords for the titles most likely to be encountered."""
@@ -256,11 +258,22 @@ def data_keywords(
     if not has_tmdb():
         _fail("no TMDB credentials")
     con = store.connect()
+    # Anything with keywords already stored counts as fetched, so a catalogue
+    # enriched before this marker existed is not re-requested wholesale.
+    con.execute(
+        "UPDATE titles SET keywords_at = now() "
+        "WHERE keywords_at IS NULL AND keywords IS NOT NULL AND len(keywords) > 0"
+    )
+    # `top` is a coverage target, not a batch size: "the N most-voted titles
+    # should have keywords". Ranking first and filtering second makes a
+    # resumed run finish the same N rather than moving on to the next N.
     targets = con.execute(
         """
-        SELECT item_id, tmdb_id, kind FROM titles
-        WHERE tmdb_id IS NOT NULL AND (keywords IS NULL OR len(keywords) = 0)
-        ORDER BY imdb_votes DESC NULLS LAST LIMIT ?
+        SELECT item_id, tmdb_id, kind FROM (
+            SELECT item_id, tmdb_id, kind, keywords_at,
+                   row_number() OVER (ORDER BY imdb_votes DESC NULLS LAST) AS rank
+            FROM titles WHERE tmdb_id IS NOT NULL
+        ) WHERE rank <= ? AND keywords_at IS NULL
         """,
         [top],
     ).fetchall()
@@ -273,8 +286,12 @@ def data_keywords(
     written = {"n": 0}
 
     def flush(batch):
-        con.executemany("UPDATE titles SET keywords = ? WHERE item_id = ?",
-                        [(kws, item_id) for item_id, kws in batch])
+        # keywords_at is stamped even when the list comes back empty: "TMDB
+        # has none for this title" is a result, not a failure to fetch.
+        con.executemany(
+            "UPDATE titles SET keywords = ?, keywords_at = now() WHERE item_id = ?",
+            [(kws, item_id) for item_id, kws in batch],
+        )
         written["n"] += len(batch)
 
     try:
