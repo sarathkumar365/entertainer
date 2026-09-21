@@ -176,6 +176,33 @@ class Engine:
 
     # --- reporting ---------------------------------------------------------
 
+    def coverage(self, con) -> dict[str, int]:
+        """How much of the catalogue each artifact actually covers.
+
+        A rebuild reassigns item ids and a prune removes rows, so it is
+        entirely possible to end up with a catalogue and an item space that
+        disagree about which titles exist. Nothing crashes when that happens —
+        unknown ids are simply skipped — which is exactly why it needs
+        surfacing rather than leaving to be noticed via mysteriously narrow
+        recommendations.
+        """
+        from .models import cf, encoder
+
+        catalog_ids = {
+            int(r[0]) for r in con.execute("SELECT item_id FROM titles").fetchall()
+        }
+        out = {"catalog": len(catalog_ids), "embedded": 0, "fused": 0, "scorable": 0}
+        if encoder.exists():
+            ids, _ = encoder.load()
+            out["embedded"] = len(set(ids.tolist()) & catalog_ids)
+        if fusion.exists():
+            art = fusion.load()
+            fused_ids = set(art.item_ids.tolist())
+            out["fused"] = len(fused_ids & catalog_ids)
+            out["scorable"] = out["fused"]
+        del cf
+        return out
+
     @cached_property
     def artifacts_present(self) -> dict[str, bool]:
         from .models import cf, encoder

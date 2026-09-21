@@ -1063,6 +1063,18 @@ def stats() -> None:
         langs = con.execute(
             "SELECT language, count(*) n FROM titles GROUP BY 1 ORDER BY n DESC LIMIT 12"
         ).fetchall()
+        cover = engine.coverage(con)
+
+    if cover["catalog"] and present["fused_space"]:
+        share = cover["fused"] / cover["catalog"]
+        if share < 0.995:
+            console.print(
+                f"\n[yellow]item space covers {cover['fused']:,} of "
+                f"{cover['catalog']:,} titles ({share:.1%}).[/yellow] "
+                "The rest cannot be recommended. Run [cyan]ent data embed[/cyan] "
+                "then [cyan]ent data fuse[/cyan]."
+            )
+
     t2 = Table("metric", "value")
     for key, value in c.items():
         t2.add_row(key, f"{value:,}")

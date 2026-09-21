@@ -573,3 +573,24 @@ def test_dismissals_decay_like_everything_else(app_env):
         ages = {i: a for i, a in store.negatives(con)}
     assert ages and max(ages.values()) > 700
     del Engine
+
+
+def test_stats_warns_when_the_item_space_is_stale(app_env):
+    """A rebuild reassigns ids; a catalogue and item space can silently disagree."""
+    cli, runner = app_env
+    from entertainer import store
+
+    clean = run(cli, runner, "stats")
+    assert clean.exit_code == 0
+    assert "item space covers" not in clean.output
+
+    with store.session() as con:
+        con.execute(
+            "INSERT INTO titles (item_id, imdb_id, kind, title, year, language, imdb_votes) "
+            "VALUES (99001, 'tt99001', 'movie', 'Ghost Entry', 2024, 'en', 1000)"
+        )
+
+    stale = run(cli, runner, "stats")
+    assert stale.exit_code == 0
+    assert "item space covers" in stale.output
+    assert "cannot be recommended" in stale.output
