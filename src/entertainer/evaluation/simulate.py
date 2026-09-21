@@ -216,18 +216,24 @@ def arm_content_centroid(fs, meta, candidate_rows, answered, k):
 
 
 def arm_weighted_knn(fs, meta, candidate_rows, answered, k, neighbours: int = 30):
-    """Rating-weighted item kNN over the fused space."""
+    """Rating-weighted item kNN over the fused space.
+
+    Deliberately *not* mean-centred. Centring is the textbook move and it is
+    wrong for this data: people rate what they expected to like, so the
+    verdicts sit in a narrow band near the top and centring converts "liked
+    slightly less" into "disliked". It took this baseline from competitive to
+    NDCG@10 0.007 — worse than random ordering of a plausible shortlist.
+    """
     if not answered:
         return arm_quality(fs, meta, candidate_rows, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
     sims = fs.latent[candidate_rows] @ fs.latent[fs.rows_for(ids)].T
-    centred = rewards - rewards.mean()
     top = min(neighbours, sims.shape[1])
     idx = np.argpartition(-sims, top - 1, axis=1)[:, :top]
     rows = np.arange(sims.shape[0])[:, None]
     s = np.maximum(sims[rows, idx], 0.0)
-    scores = (s * centred[idx]).sum(axis=1) / (s.sum(axis=1) + 1e-6)
+    scores = (s * rewards[idx]).sum(axis=1) / (s.sum(axis=1) + 1e-6)
     return _rank(scores, candidate_rows, fs, k)
 
 
@@ -243,12 +249,40 @@ def arm_ridge(fs, meta, candidate_rows, answered, k):
     return _rank(m.predict(fs.matrix[candidate_rows]), candidate_rows, fs, k)
 
 
-def _taste_arm(fs, meta, candidate_rows, answered, k, prior):
+NEGATIVE_SAMPLES = 1000
+
+
+def _with_negatives(fs, ids, rewards, seed=0):
+    """Append sampled unrated titles as weak negatives.
+
+    Mirrors what the engine does at serving time. Without this the model has
+    no example of "not for me" and, because people rate things they expected
+    to like, almost no variance to learn from either — see engine.py.
+    """
+    from ..engine import NEGATIVE_REWARD, NEGATIVE_WEIGHT
+
+    rng = np.random.default_rng(seed)
+    known = set(int(i) for i in ids)
+    count = min(NEGATIVE_SAMPLES, len(fs.item_ids))
+    rows = rng.choice(len(fs.item_ids), size=count, replace=False)
+    rows = np.array([r for r in rows if int(fs.item_ids[r]) not in known], dtype=np.int64)
+
+    X = np.vstack([fs.vectors_for(ids), fs.matrix[rows]])
+    y = np.concatenate([rewards, np.full(rows.size, NEGATIVE_REWARD)])
+    w = np.concatenate([np.ones(len(rewards)), np.full(rows.size, NEGATIVE_WEIGHT)])
+    return X, y, w
+
+
+def _taste_arm(fs, meta, candidate_rows, answered, k, prior, negatives=True):
     if len(answered) < 3:
         return arm_quality(fs, meta, candidate_rows, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
-    model = fit_taste(fs.vectors_for(ids), rewards, prior=prior)
+    if negatives:
+        X, y, w = _with_negatives(fs, ids, rewards)
+    else:
+        X, y, w = fs.vectors_for(ids), rewards, None
+    model = fit_taste(X, y, sample_weight=w, prior=prior)
     mean = model.predict(fs.matrix[candidate_rows], with_std=False)
     return _rank(mean, candidate_rows, fs, k)
 
@@ -256,6 +290,13 @@ def _taste_arm(fs, meta, candidate_rows, answered, k, prior):
 def arm_taste_flat(fs, meta, candidate_rows, answered, k):
     """The engine with an isotropic prior: no population knowledge at all."""
     return _taste_arm(fs, meta, candidate_rows, answered, k, prior=None)
+
+
+def arm_taste_no_negatives(fs, meta, candidate_rows, answered, k):
+    """The engine without sampled negatives: positives-only regression."""
+    return _taste_arm(
+        fs, meta, candidate_rows, answered, k, prior=_ACTIVE_PRIOR, negatives=False
+    )
 
 
 def arm_taste(fs, meta, candidate_rows, answered, k):
@@ -279,6 +320,7 @@ ARMS = {
     "weighted-kNN": arm_weighted_knn,
     "ridge": arm_ridge,
     "entertainer-flat-prior": arm_taste_flat,
+    "entertainer-no-negatives": arm_taste_no_negatives,
     "entertainer": arm_taste,
 }
 

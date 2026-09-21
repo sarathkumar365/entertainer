@@ -36,6 +36,24 @@ HALF_LIFE_DAYS = 1100.0
 SKIP_REWARD = 0.25
 SKIP_WEIGHT = 0.5
 
+# Unrated titles sampled as implicit negatives.
+#
+# A preference model trained only on titles the user chose to rate has never
+# seen an example of "not for me". Worse, people mostly rate things they
+# already expected to like: the verdicts are a narrow band near the top of
+# the scale, and centring that band turns "liked slightly less" into
+# "disliked" while leaving almost no variance to learn from. Measured on
+# held-out MovieLens users, the fit degenerated completely — every weight
+# shrank to zero and the model predicted a constant.
+#
+# Sampling from the catalogue at large supplies the missing contrast. Most
+# unrated titles genuinely are things this person will not watch, so the
+# label is usually right; it is weak and occasionally wrong, so it carries
+# little weight. This took NDCG@10 from 0.092 to 0.197.
+NEGATIVE_SAMPLES = 1000
+NEGATIVE_REWARD = 0.15
+NEGATIVE_WEIGHT = 0.3
+
 # Columns needed for filtering, scoring and axis naming. The synopsis is
 # deliberately excluded: it is only needed for the handful of titles actually
 # displayed, and loading 300k of them costs hundreds of megabytes for nothing.
@@ -140,7 +158,14 @@ class Engine:
             np.array(weak, dtype=bool),
         )
 
-    def fit(self, con, save: bool = True, half_life_days: float = HALF_LIFE_DAYS) -> TasteModel | None:
+    def fit(
+        self,
+        con,
+        save: bool = True,
+        half_life_days: float = HALF_LIFE_DAYS,
+        negatives: int = NEGATIVE_SAMPLES,
+        seed: int = 0,
+    ) -> TasteModel | None:
         ids, rewards, ages, weak = self.labels(con)
         if ids.size < 3:
             return None
@@ -156,6 +181,12 @@ class Engine:
         if half_life_days > 0:
             weights = weights * np.exp(-np.log(2.0) * ages / half_life_days)
         weights = np.maximum(weights, 1e-3)
+
+        if negatives:
+            X, rewards, weights = _add_sampled_negatives(
+                fs, X, rewards, weights, known=set(ids.tolist()),
+                count=negatives, seed=seed,
+            )
 
         model = fit_taste(X, rewards, sample_weight=weights, prior=self.prior(con))
         if save:
@@ -214,6 +245,35 @@ class Engine:
             "fused_space": fusion.exists(),
             "taste_model": TasteModel.exists(),
         }
+
+
+def _add_sampled_negatives(
+    fs: FeatureSpace,
+    X: np.ndarray,
+    rewards: np.ndarray,
+    weights: np.ndarray,
+    known: set[int],
+    count: int,
+    seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Append unrated titles as weak negatives. See NEGATIVE_SAMPLES."""
+    rng = np.random.default_rng(seed)
+    total = len(fs.item_ids)
+    if total == 0:
+        return X, rewards, weights
+    count = min(count, total)
+    rows = rng.choice(total, size=count, replace=False)
+    # Drop any that the user has actually rated; sampling without replacement
+    # over a 70k catalogue makes this a handful of rows at most.
+    rows = np.array([r for r in rows if int(fs.item_ids[r]) not in known], dtype=np.int64)
+    if rows.size == 0:
+        return X, rewards, weights
+
+    return (
+        np.vstack([X, fs.matrix[rows]]),
+        np.concatenate([rewards, np.full(rows.size, NEGATIVE_REWARD)]),
+        np.concatenate([weights, np.full(rows.size, NEGATIVE_WEIGHT)]),
+    )
 
 
 def liked_titles(con, engine: Engine, min_reward: float = 0.7, limit: int = 60):

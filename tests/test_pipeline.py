@@ -613,3 +613,60 @@ def test_truncation_keeps_the_projection_consistent(world):
         "ij,ij->i", art.project(content[uncovered]), art.space[uncovered]
     )
     assert cosines.min() > 0.999, cosines.min()
+
+
+def test_a_compressed_reward_band_still_produces_a_usable_model(world):
+    """The failure that sank the first real benchmark.
+
+    People rate what they expected to like, so real verdicts arrive as a
+    narrow band near the top of the scale. Fitting on those alone made every
+    weight collapse to zero and the model predict a constant — NDCG driven
+    entirely by tie-breaking. Sampled negatives supply the missing contrast.
+    """
+    from entertainer.engine import NEGATIVE_REWARD, NEGATIVE_WEIGHT
+
+    fs, reward, cluster = world["fs"], world["reward"], world["cluster"]
+    rng = np.random.default_rng(31)
+
+    # Only titles the viewer liked, rated in a tight band — the real shape.
+    liked = np.array([i for i in range(N_ITEMS) if cluster[i] in LIKED_CLUSTERS])
+    train = rng.choice(liked, size=30, replace=False)
+    compressed = 0.78 + 0.09 * rng.standard_normal(30)
+
+    bare = fit(fs.vectors_for(train), compressed, allow_rff=False)
+    bare_pred = bare.predict(fs.matrix, with_std=False)
+
+    negatives = rng.choice(N_ITEMS, size=600, replace=False)
+    X = np.vstack([fs.vectors_for(train), fs.matrix[negatives]])
+    y = np.concatenate([compressed, np.full(len(negatives), NEGATIVE_REWARD)])
+    w = np.concatenate([np.ones(30), np.full(len(negatives), NEGATIVE_WEIGHT)])
+    with_neg = fit(X, y, sample_weight=w, allow_rff=False)
+    neg_pred = with_neg.predict(fs.matrix, with_std=False)
+
+    # Without negatives the posterior collapses: nothing to rank by.
+    assert bare_pred.std() < 0.02, bare_pred.std()
+    assert neg_pred.std() > bare_pred.std() * 5
+
+    # And the model can now actually separate the liked clusters.
+    is_liked = np.isin(cluster, LIKED_CLUSTERS)
+    assert neg_pred[is_liked].mean() > neg_pred[~is_liked].mean() + 0.05
+
+
+def test_sampled_negatives_exclude_titles_the_user_rated(world):
+    from entertainer.engine import _add_sampled_negatives
+
+    fs, reward = world["fs"], world["reward"]
+    rng = np.random.default_rng(3)
+    ids = rng.choice(N_ITEMS, size=40, replace=False)
+    X = fs.vectors_for(ids)
+    rewards = reward[ids]
+    weights = np.ones(40)
+
+    X2, y2, w2 = _add_sampled_negatives(
+        fs, X, rewards, weights, known=set(int(i) for i in ids), count=500, seed=1
+    )
+    assert X2.shape[0] == len(y2) == len(w2) > 40
+    # Original rows untouched, appended rows all weak negatives.
+    assert np.allclose(y2[:40], rewards)
+    assert np.all(y2[40:] < 0.2)
+    assert np.all(w2[40:] < 1.0)
