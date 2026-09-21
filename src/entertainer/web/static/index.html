@@ -159,10 +159,11 @@ function langParam(){
 }
 
 async function loadFeed(append){
-  const d = await api(`/api/feed?years=2&limit=60&page=${page}&langs=${encodeURIComponent(langParam())}`);
   const g = $('#grid');
-  if(!append) g.innerHTML = '';
-  d.items.forEach(it => g.appendChild(card(it, false)));
+  if(!append){ g.innerHTML = ''; $('#empty').textContent = 'Loading…'; $('#empty').style.display='block'; }
+  const d = await api(`/api/feed?years=2&limit=60&page=${page}&langs=${encodeURIComponent(langParam())}`);
+  d.items.forEach(it => g.appendChild(card(it, !!it.external)));
+  $('#empty').textContent = 'Nothing left here. Widen the languages or years.';
   $('#empty').style.display = g.children.length ? 'none' : 'block';
 }
 
@@ -210,8 +211,17 @@ $('#undo').onclick = doUndo;
 $('#toastundo').onclick = doUndo;
 
 (async () => {
-  const p = await api('/api/progress');
+  const [p, m] = await Promise.all([api('/api/progress'), api('/api/mode')]);
   rated = p.rated; $('#count').textContent = rated;
+  if(m.live){
+    $('#feedhead').textContent = 'Recent and well received — served live from TMDB';
+    const note = document.createElement('div');
+    note.className = 'legend';
+    note.style.marginTop = '6px';
+    note.innerHTML = 'No local catalogue on this machine, so titles come straight from TMDB. '
+      + 'Coverage of South Indian cinema is thinner this way — import a bundle for the full catalogue.';
+    document.querySelector('header').appendChild(note);
+  }
   await loadLanguages();
   await loadFeed(false);
 })();

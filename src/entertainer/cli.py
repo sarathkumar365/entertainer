@@ -1046,6 +1046,12 @@ def rate(
         False, help="Bind to all interfaces so another device on the network can reach it."
     ),
     token: str = typer.Option("", help="Shared secret. Generated automatically when --lan."),
+    live: bool = typer.Option(
+        None,
+        "--live/--catalogue",
+        help="Serve titles from TMDB instead of a local catalogue. "
+        "Chosen automatically when there is no catalogue.",
+    ),
     open_browser: bool = typer.Option(True, "--open/--no-open"),
 ) -> None:
     """Open the rating interface — a grid of posters you click through.
@@ -1058,13 +1064,23 @@ def rate(
     Everything written here goes into the same event log the CLI uses, so
     `ent recs`, `ent taste` and `ent audit` see it immediately.
     """
-    _require_catalog()
     try:
         import uvicorn
     except ImportError:
         _fail("install the web extra: uv pip install -e '.[web]'")
 
-    from .web.app import create_app
+    from .web.app import EMPTY_CATALOGUE, _catalogue_size, create_app
+
+    size = _catalogue_size()
+    use_live = live if live is not None else size < EMPTY_CATALOGUE
+    if use_live and not has_tmdb():
+        _fail(
+            "no catalogue on this machine and no TMDB credentials.\n"
+            "Either put TMDB_BEARER in .env, or import a bundle with "
+            "`ent bundle import <file>`."
+        )
+    if not use_live and size < EMPTY_CATALOGUE:
+        _fail("no catalogue — run `ent setup`, `ent bundle import <file>`, or use --live")
 
     if lan:
         host = "0.0.0.0"  # noqa: S104 - deliberate, and gated behind a token
@@ -1098,7 +1114,12 @@ def rate(
             f"[bold]{url}[/bold]\n\n"
             "[bold]♥[/bold] loved   [bold]+[/bold] liked   [bold]~[/bold] fine   "
             "[bold]−[/bold] disliked   [bold]?[/bold] not seen\n"
-            "search finds anything TMDB knows, even outside the catalogue\n\n"
+            + (
+                "[yellow]live mode — titles come from TMDB, no local catalogue[/yellow]\n"
+                if use_live
+                else f"[dim]{size:,} titles in the local catalogue[/dim]\n"
+            )
+            + "search finds anything TMDB knows, even outside the catalogue\n\n"
             + (
                 "[yellow]reachable on your local network — the link above "
                 "contains its access token[/yellow]\n"
@@ -1115,7 +1136,10 @@ def rate(
         import webbrowser
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_app(token=token or None), host=host, port=port, log_level="warning")
+    uvicorn.run(
+        create_app(token=token or None, live=use_live),
+        host=host, port=port, log_level="warning",
+    )
 
 
 @app.command()

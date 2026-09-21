@@ -275,6 +275,32 @@ encodes it and places it in the item space, with no rebuild.
 
 Nothing leaves the machine but TMDB metadata requests.
 
+### On a second machine
+
+A clone with no catalogue serves the same interface straight from TMDB — no
+data to move, just a TMDB key in `.env`:
+
+```bash
+ent rate            # live mode is chosen automatically when there is no catalogue
+```
+
+The trade is real: TMDB's rating pool for South Indian cinema is roughly two
+orders of magnitude thinner than IMDb's, so the live feed is shallower and
+skews towards whatever had international distribution. For the full
+catalogue, move a bundle across:
+
+```bash
+ent bundle export --no-space --path rate.zip     # 21MB, enough to rate and search
+ent bundle export --path full.zip                # 75MB, adds recommendations
+```
+
+Verdicts collected anywhere merge back by IMDb id:
+
+```bash
+ent export --path verdicts.jsonl     # on the second machine
+ent import verdicts.jsonl            # on the main one
+```
+
 ## Use
 
 ```bash

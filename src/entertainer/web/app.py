@@ -34,6 +34,10 @@ from .feed import DEFAULT_WEIGHTS, FeedRequest, fetch
 STATIC = Path(__file__).parent / "static"
 POSTER_BASE = "https://image.tmdb.org/t/p/w342"
 
+# Below this many titles, assume the catalogue was never built rather than
+# built small.
+EMPTY_CATALOGUE = 25
+
 
 def _poster(path: str | None) -> str | None:
     return f"{POSTER_BASE}{path}" if path else None
@@ -74,7 +78,15 @@ class AddRequest(BaseModel):
     verdict: str | None = None
 
 
-def create_app(token: str | None = None) -> FastAPI:
+def _catalogue_size() -> int:
+    try:
+        with store.session(read_only=True) as con:
+            return int(con.execute("SELECT count(*) FROM titles").fetchone()[0])
+    except Exception:
+        return 0
+
+
+def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     """Build the app. A token is required once it is bound off localhost.
 
     The interface writes to the verdict log and can pull titles from TMDB, so
@@ -85,6 +97,13 @@ def create_app(token: str | None = None) -> FastAPI:
     """
     app = FastAPI(title="entertainer", docs_url=None, redoc_url=None)
     engine = Engine()
+
+    # Live mode when asked for, and automatically when there is essentially no
+    # catalogue to read — a fresh clone should be able to rate straight away
+    # rather than showing an empty grid and an instruction to fetch a file.
+    # The threshold is "empty", not "small": a deliberately narrow catalogue
+    # is still a catalogue and must not be silently overridden.
+    use_live = live if live is not None else _catalogue_size() < EMPTY_CATALOGUE
 
     if token:
 
@@ -111,6 +130,21 @@ def create_app(token: str | None = None) -> FastAPI:
 
     @app.get("/api/languages")
     def languages() -> dict[str, Any]:
+        if use_live:
+            from .live import VOTE_FLOORS
+
+            codes = [c for c in DEFAULT_WEIGHTS if c in VOTE_FLOORS]
+            return {
+                "languages": [
+                    {
+                        "code": c,
+                        "name": language_label(c),
+                        "titles": 0,
+                        "weight": DEFAULT_WEIGHTS.get(c, 0.0),
+                    }
+                    for c in codes
+                ]
+            }
         with store.session(read_only=True) as con:
             rows = con.execute(
                 """
@@ -133,6 +167,14 @@ def create_app(token: str | None = None) -> FastAPI:
             ]
         }
 
+    @app.get("/api/mode")
+    def mode() -> dict[str, Any]:
+        return {
+            "live": use_live,
+            "catalogue": _catalogue_size(),
+            "tmdb": has_tmdb(),
+        }
+
     @app.get("/api/feed")
     def feed(
         years: int = 2,
@@ -153,6 +195,29 @@ def create_app(token: str | None = None) -> FastAPI:
                     weights[code.strip()] = float(w) if w else 1.0
                 except ValueError:
                     weights[code.strip()] = 1.0
+        if use_live:
+            if not has_tmdb():
+                raise HTTPException(
+                    400, "no catalogue and no TMDB credentials — nothing to show"
+                )
+            from .live import LiveRequest
+            from .live import fetch as live_fetch
+
+            since = f"{dt.date.today().year - max(years, 0)}-01-01"
+            items = live_fetch(
+                LiveRequest(
+                    languages=weights,
+                    since=since,
+                    limit=max(1, min(limit, 200)),
+                    page=page + 1,
+                    kind=kind or "movie",
+                )
+            )
+            for it in items:
+                it["poster"] = _poster(it.pop("poster_path", None))
+                it["external"] = True
+            return {"items": items, "live": True}
+
         req = FeedRequest(
             years=years,
             limit=max(1, min(limit, 200)),
@@ -163,7 +228,7 @@ def create_app(token: str | None = None) -> FastAPI:
         )
         with store.session(read_only=True) as con:
             rows = fetch(con, req, dt.date.today().year)
-        return {"items": [_present(r) for r in rows]}
+        return {"items": [_present(r) for r in rows], "live": False}
 
     @app.post("/api/rate")
     def rate(body: Verdict) -> dict[str, Any]:
@@ -285,9 +350,13 @@ def create_app(token: str | None = None) -> FastAPI:
             raise HTTPException(404, "TMDB returned nothing for that id")
         row = tmdb.detail_to_row(payload, body.kind)
 
-        art = fusion.load()
-        if art.pca_mean is None:
-            raise HTTPException(500, "item space predates projection; run `ent data fuse`")
+        art = None
+        if not use_live:
+            art = fusion.load()
+            if art.pca_mean is None:
+                raise HTTPException(
+                    500, "item space predates projection; run `ent data fuse`"
+                )
 
         with store.session() as con:
             item_id = catalog.insert_title(con, row)
@@ -296,7 +365,12 @@ def create_app(token: str | None = None) -> FastAPI:
             ).fetchone()[0]
         del already
 
-        if item_id not in engine.features().index:
+        # Placing the title in the item space needs the encoder, which is a
+        # 1.2GB download. On a machine that only collects verdicts that is a
+        # steep price for something the main machine will redo anyway, so it
+        # is skipped when the space is not present. The verdict is still
+        # recorded and still merges back, because it keys on the IMDb id.
+        if not use_live and item_id not in engine.features().index:
             content = encoder.encode_texts([build_card(row)], show_progress=False)
             try:
                 latent = art.project(content)

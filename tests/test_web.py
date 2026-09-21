@@ -81,7 +81,7 @@ def client(tmp_path, monkeypatch):
         )
     )
     encoder.save(ids, latent)
-    return TestClient(webapp.create_app())
+    return TestClient(webapp.create_app(live=False))
 
 
 def test_index_serves(client):
@@ -244,3 +244,65 @@ def test_token_header_also_works(client):
 
 def test_no_token_means_no_gate(client):
     assert client.get("/api/progress").status_code == 200
+
+
+@pytest.fixture()
+def bare(tmp_path, monkeypatch):
+    """A machine with no catalogue at all — a fresh clone."""
+    import importlib
+
+    monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "bare"))
+    from entertainer import config, engine, store
+
+    for mod in (config, store, engine):
+        importlib.reload(mod)
+    from entertainer.web import app as webapp
+    from entertainer.web import live
+
+    importlib.reload(live)
+    importlib.reload(webapp)
+    config.PATHS.ensure()
+    store.connect().close()
+    return webapp
+
+
+def test_live_mode_is_chosen_automatically_when_there_is_no_catalogue(bare):
+    c = TestClient(bare.create_app(live=True))
+    m = c.get("/api/mode").json()
+    assert m["live"] is True
+    assert m["catalogue"] == 0
+
+
+def test_catalogue_mode_is_chosen_when_one_exists(tmp_path, monkeypatch, client):
+    """Auto-detection must not override a catalogue that exists."""
+    from entertainer.web import app as webapp
+
+    auto = TestClient(webapp.create_app())
+    m = auto.get("/api/mode").json()
+    assert m["live"] is False, m
+    assert m["catalogue"] > webapp.EMPTY_CATALOGUE
+
+
+def test_live_feed_refuses_without_credentials(bare):
+    c = TestClient(bare.create_app(live=True))
+    r = c.get("/api/feed")
+    assert r.status_code == 400
+    assert "TMDB" in r.text
+
+
+def test_live_languages_do_not_need_a_catalogue(bare):
+    c = TestClient(bare.create_app(live=True))
+    d = c.get("/api/languages").json()
+    codes = {row["code"] for row in d["languages"]}
+    assert {"ml", "ta", "kn", "ko", "en"} <= codes
+    weights = {row["code"]: row["weight"] for row in d["languages"]}
+    assert 0 < weights["te"] < weights["ml"]
+
+
+def test_live_vote_floors_are_calibrated_per_industry():
+    """A single floor either floods with Hollywood or empties out Kannada."""
+    from entertainer.web.live import VOTE_FLOORS
+
+    assert VOTE_FLOORS["en"] > VOTE_FLOORS["ko"] > VOTE_FLOORS["ml"]
+    assert VOTE_FLOORS["kn"] < VOTE_FLOORS["ta"]
+    assert all(v > 0 for v in VOTE_FLOORS.values())
