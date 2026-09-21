@@ -228,10 +228,7 @@ def recommend(
         # popularity cut, so a widely-loved film is discouraged rather than
         # banned — the user asked for the road less travelled, not for the
         # obscure at any cost.
-        votes = np.array(
-            [float((meta.get(int(i)) or {}).get("imdb_votes") or 0) for i in fs.item_ids[idx]]
-        )
-        exposure = np.log1p(votes)
+        exposure = np.log1p(fs.columns.votes[idx].astype(np.float64))
         exposure = (exposure - exposure.mean()) / (exposure.std() + 1e-9)
         scores = scores - novelty * float(np.std(scores)) * exposure
 
