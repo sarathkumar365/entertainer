@@ -1186,6 +1186,84 @@ def history(limit: int = typer.Option(30)) -> None:
     console.print(table)
 
 
+bundle_app = typer.Typer(no_args_is_help=True, help="Move a built catalogue between machines.")
+app.add_typer(bundle_app, name="bundle")
+
+
+@bundle_app.command("export")
+def bundle_export(
+    path: Path = typer.Option(Path("entertainer-bundle.zip")),
+    space: bool = typer.Option(True, help="Include the item space (needed for `ent recs`)."),
+    encodings: bool = typer.Option(
+        False, help="Include raw content embeddings (only `ent add` needs them)."
+    ),
+) -> None:
+    """Pack the built catalogue so another machine can use it without rebuilding.
+
+    Four hours of TMDB round trips become a file. Verdicts are deliberately
+    not included — use `ent export` for those.
+    """
+    from . import bundle
+
+    _require_catalog()
+    info = bundle.export(path, include_space=space, include_encodings=encodings)
+    console.print(
+        Panel.fit(
+            f"[bold]{info.path}[/bold]\n"
+            f"{info.bytes / 1e6:.1f} MB · {info.titles:,} titles\n"
+            f"[dim]{', '.join(info.contents)}[/dim]\n\n"
+            "on the other machine:\n"
+            "  [cyan]git clone <repo> && uv pip install -e '.[web]'[/cyan]\n"
+            f"  [cyan]ent bundle import {info.path.name}[/cyan]\n"
+            "  [cyan]ent rate[/cyan]",
+            title="bundle written",
+            border_style="cyan",
+        )
+    )
+    console.print(
+        "[yellow]This is IMDb and TMDB derived data. Keep it private — "
+        "their terms do not permit redistributing it publicly.[/yellow]"
+    )
+
+
+@bundle_app.command("info")
+def bundle_info(path: Path = typer.Argument(...)) -> None:
+    """Show what a bundle contains without unpacking it."""
+    from . import bundle
+
+    data = bundle.inspect(path)
+    table = Table("field", "value")
+    for key, value in data.items():
+        table.add_row(key, str(value))
+    console.print(table)
+
+
+@bundle_app.command("import")
+def bundle_import(
+    path: Path = typer.Argument(...),
+    overwrite: bool = typer.Option(
+        False, help="Replace an existing catalogue even if this machine has verdicts."
+    ),
+) -> None:
+    """Unpack a bundle written by `ent bundle export`."""
+    from . import bundle
+
+    try:
+        manifest = bundle.restore(path, overwrite=overwrite)
+    except RuntimeError as exc:
+        _fail(str(exc))
+    console.print(
+        f"[green]{manifest['restored_titles']:,} titles restored[/green]"
+        + (
+            f", [dim]{manifest['preserved_events']} existing events kept[/dim]"
+            if manifest.get("preserved_events")
+            else ""
+        )
+    )
+    console.print(f"[dim]contents: {', '.join(manifest.get('contents', []))}[/dim]")
+    console.print("\n[bold]next:[/bold] [cyan]ent rate[/cyan]")
+
+
 @app.command("export")
 def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
     """Export your verdicts so the catalogue can be rebuilt without losing them.
