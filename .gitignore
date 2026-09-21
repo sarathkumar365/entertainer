@@ -2,9 +2,12 @@
 .env
 *.key
 
-# personal data — this repo is public, never push taste data
-data/
-profile/
+# personal data — this repo is public, never push taste data.
+# Anchored with a leading slash: a bare `data/` matches any directory of that
+# name at any depth, which silently excluded the whole of
+# src/entertainer/data/ — the entire ingest layer — from the repository.
+/data/
+/profile/
 *.duckdb
 *.duckdb.wal
 *.parquet
@@ -23,7 +26,7 @@ venv/
 .ipynb_checkpoints/
 
 # models
-models_cache/
+/models_cache/
 *.safetensors
 *.gguf
 
