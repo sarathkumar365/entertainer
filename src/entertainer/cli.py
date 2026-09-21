@@ -21,6 +21,8 @@ from rich.table import Table
 from . import store
 from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
+from .manifests import write as write_manifest
+from .pipeline import preflight as pipeline_preflight
 from .resolve import Match, resolve_one, search
 
 
@@ -141,7 +143,8 @@ def setup(
     """Run everything: download, build, enrich, prune, embed, factorise, fuse, prior."""
     from .data import catalog, download
 
-    PATHS.ensure()
+    info = pipeline_preflight()
+    console.print(f"[dim]preflight passed: {info['free_bytes'] / 1024**3:.1f} GiB free[/dim]")
     console.rule("[bold]1/8 downloading source data")
     download.fetch_imdb()
     download.fetch_movielens()
@@ -168,7 +171,24 @@ def setup(
     console.rule("[bold]8/8 learning the population prior")
     data_prior()
 
+    with store.session(read_only=True) as con:
+        counts = store.counts(con)
+    manifest = write_manifest("build", {"counts": counts, "min_votes": min_votes, "floor_scale": floor_scale})
+    console.print(f"[dim]build manifest: {manifest['path']}[/dim]")
+
     console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
+
+
+@app.command("preflight")
+def preflight_command() -> None:
+    """Check local storage and TMDB configuration before a full build."""
+    try:
+        info = pipeline_preflight()
+    except RuntimeError as exc:
+        _fail(str(exc))
+    console.print(
+        f"[green]ready[/green] — {info['free_bytes'] / 1024**3:.1f} GiB free at {info['data_dir']}"
+    )
 
 
 @data_app.command("fetch")
@@ -1517,6 +1537,15 @@ def evaluate(
             raise typer.Exit(code=1)
 
     results = run(fs, meta, histories, cfg, elicitation=elicitation, prior=prior)
+    evaluation_manifest = write_manifest(
+        "offline-evaluation",
+        {
+            "config": cfg.__dict__,
+            "n_users": len(histories),
+            "elicitation": elicitation,
+            "arms": list(results),
+        },
+    )
 
     table = Table("arm", "NDCG@10", "P@10", "MAP@10", "MRR@10", "novelty", "diversity", "serend.")
     for name, res in results.items():
@@ -1554,6 +1583,7 @@ def evaluate(
         }
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"[green]report -> {out}[/green]")
+    console.print(f"[dim]evaluation manifest: {evaluation_manifest['path']}[/dim]")
 
 
 def main() -> None:  # pragma: no cover

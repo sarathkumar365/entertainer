@@ -62,6 +62,9 @@
   .legend b{color:var(--text);font-weight:600}
   .badge{background:#1d2333;border:1px solid var(--line);color:var(--dim);
     font-size:11px;padding:2px 7px;border-radius:999px}
+  .validation{margin-top:10px;color:var(--dim);font-size:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .validation button{padding:4px 9px;font-size:12px}
+  .validate{margin:0 7px 7px;color:var(--accent);font-size:12px;background:transparent}
 </style>
 </head>
 <body>
@@ -74,6 +77,10 @@
     <button class="ghost" id="more">Load more</button>
   </div>
   <div class="chips" id="chips"></div>
+  <div class="validation">
+    <span id="validationmsg">Blind test: search for films you have watched but have not rated, then add at least two.</span>
+    <button class="ghost" id="sealvalidation" disabled>Seal hidden pool</button>
+  </div>
   <div class="legend">
     <b>♥</b> loved · <b>+</b> liked · <b>~</b> fine · <b>−</b> disliked · <b>?</b> not seen
     &nbsp;·&nbsp; showing well-received titles from the last <b id="yrs">2</b> years, balanced across languages
@@ -129,7 +136,12 @@ function card(it, external){
     b.onclick = async () => {
       el.classList.add('gone');
       try{
-        if(external){
+        if(validationCases.has(it.item_id)){
+          await api(`/api/validation/${validationCases.get(it.item_id)}/reveal`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({verdict: b.dataset.v})});
+          validationCases.delete(it.item_id);
+          selectedValidation.delete(it.item_id);
+          updateValidation();
+        } else if(external){
           await api('/api/add', {method:'POST', headers:{'content-type':'application/json'},
             body: JSON.stringify({tmdb_id: it.tmdb_id, kind: it.kind, verdict: b.dataset.v})});
         } else {
@@ -142,10 +154,41 @@ function card(it, external){
       }catch(e){ el.classList.remove('gone'); toast('failed: ' + e.message); }
     };
   });
+  if(!external && it.item_id != null){
+    const p = document.createElement('button');
+    p.className = 'validate'; p.textContent = 'Predict my taste';
+    p.onclick = async () => {
+      try{
+        const d = await api(`/api/predict/${it.item_id}`);
+        toast(`${d.likely_like ? 'Likely like' : 'Less likely'} · ${d.score.toFixed(1)}/10 · 90% range ${d.interval_low.toFixed(1)}–${d.interval_high.toFixed(1)}`);
+      }catch(e){ toast('prediction unavailable: ' + e.message); }
+    };
+    el.appendChild(p);
+    const v = document.createElement('button');
+    v.className = 'validate';
+    v.textContent = selectedValidation.has(it.item_id) ? 'Added to blind test' : 'Add to blind test';
+    v.onclick = () => {
+      if(validationCases.has(it.item_id)){ toast('already sealed — choose a verdict to reveal it'); return; }
+      if(selectedValidation.has(it.item_id)) selectedValidation.delete(it.item_id);
+      else selectedValidation.set(it.item_id, it.title || String(it.item_id));
+      v.textContent = selectedValidation.has(it.item_id) ? 'Added to blind test' : 'Add to blind test';
+      updateValidation();
+    };
+    el.appendChild(v);
+  }
   return el;
 }
 
 let toastTimer;
+const selectedValidation = new Map(), validationCases = new Map();
+function updateValidation(){
+  const n = selectedValidation.size;
+  $('#sealvalidation').disabled = n < 2;
+  $('#sealvalidation').textContent = n ? `Seal ${n} watched titles` : 'Seal hidden pool';
+  $('#validationmsg').textContent = n
+    ? `${n} title${n === 1 ? '' : 's'} queued. Sealing stores predictions before you rate them.`
+    : 'Blind test: search for films you have watched but have not rated, then add at least two.';
+}
 function toast(msg){
   $('#toastmsg').textContent = msg;
   $('#toast').classList.add('show');
@@ -201,6 +244,15 @@ $('#q').oninput = e => {
 };
 
 $('#more').onclick = () => { page++; loadFeed(true); };
+$('#sealvalidation').onclick = async () => {
+  try{
+    const d = await api('/api/validation/seal', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({item_ids: [...selectedValidation.keys()]})});
+    d.cases.forEach(c => validationCases.set(c.item_id, c.case_id));
+    selectedValidation.clear();
+    toast('predictions sealed — choose your verdicts to reveal them');
+    updateValidation();
+  }catch(e){ toast('failed: ' + e.message); }
+};
 async function doUndo(){
   const d = await api('/api/undo', {method:'POST'});
   if(d.ok){ rated = Math.max(0, rated - 1); $('#count').textContent = rated;

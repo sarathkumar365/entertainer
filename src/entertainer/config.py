@@ -83,8 +83,17 @@ TMDB_API_BASE = "https://api.themoviedb.org/3"
 
 
 def tmdb_credentials() -> tuple[str | None, str | None]:
-    """Return (v3 api key, v4 bearer token). Either is enough; bearer wins."""
-    return os.environ.get("TMDB_API_KEY") or None, os.environ.get("TMDB_BEARER") or None
+    """Return usable ``(v3 key, v4 bearer)`` credentials.
+
+    Environment files are often edited by hand.  A pasted bearer token with a
+    smart quote or other non-ASCII character cannot be sent as an HTTP header;
+    treating it as present used to hide a valid API key and fail every web
+    request with an opaque 500.  Ignore unusable values here so all TMDB
+    callers get the same safe fallback behaviour.
+    """
+    key = os.environ.get("TMDB_API_KEY") or None
+    bearer = os.environ.get("TMDB_BEARER") or None
+    return key if key and key.isascii() else None, bearer if bearer and bearer.isascii() else None
 
 
 def has_tmdb() -> bool:

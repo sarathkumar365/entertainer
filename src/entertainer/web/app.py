@@ -78,6 +78,14 @@ class AddRequest(BaseModel):
     verdict: str | None = None
 
 
+class ValidationSealRequest(BaseModel):
+    item_ids: list[int] = Field(min_length=2, max_length=100)
+
+
+class ValidationRevealRequest(BaseModel):
+    verdict: str = Field(description="love | like | ok | meh | dislike | hate | unseen")
+
+
 def _catalogue_size() -> int:
     try:
         with store.session(read_only=True) as con:
@@ -97,6 +105,11 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     """
     app = FastAPI(title="entertainer", docs_url=None, redoc_url=None)
     engine = Engine()
+    # Apply idempotent schema additions before any read-only endpoint is hit.
+    # Existing profiles therefore gain the evidence ledger without a manual
+    # migration command and without rewriting their event history.
+    with store.session():
+        pass
 
     # Live mode when asked for, and automatically when there is essentially no
     # catalogue to read — a fresh clone should be able to rate straight away
@@ -232,6 +245,13 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
 
     @app.post("/api/rate")
     def rate(body: Verdict) -> dict[str, Any]:
+        with store.session(read_only=True) as con:
+            sealed = con.execute(
+                "SELECT 1 FROM validation_cases WHERE item_id = ? AND status = 'sealed'",
+                [body.item_id],
+            ).fetchone()
+        if sealed:
+            raise HTTPException(400, "this title is a sealed validation case; reveal it through validation")
         if body.verdict == "unseen":
             with store.session() as con:
                 store.log_event(con, body.item_id, "unseen", None, "web", {"answer": "unseen"})
@@ -291,6 +311,73 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 }
                 for t, y, ctx in recent
             ],
+        }
+
+    @app.post("/api/validation/seal")
+    def seal_validation(body: ValidationSealRequest) -> dict[str, Any]:
+        """Seal a user-selected watched pool before any verdict is revealed."""
+        from ..evaluation import personal
+
+        try:
+            return personal.seal(engine, body.item_ids)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/validation/{case_id}/reveal")
+    def reveal_validation(case_id: str, body: ValidationRevealRequest) -> dict[str, Any]:
+        """Reveal exactly one sealed validation verdict and add it to training."""
+        from ..evaluation import personal
+
+        try:
+            return personal.reveal(engine, case_id, body.verdict)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/validation/summary")
+    def validation_summary() -> dict[str, Any]:
+        """Interval-aware personal evidence; no bare point-estimate claims."""
+        from ..evaluation import personal
+
+        return personal.summary()
+
+    @app.get("/api/predict/{item_id}")
+    def predict(item_id: int) -> dict[str, Any]:
+        """Score a catalogue title without recording or changing a verdict."""
+        from ..evaluation import personal
+
+        try:
+            return personal.predict(engine, item_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/recommendations/slate")
+    def recommendation_slate(k: int = 10) -> dict[str, Any]:
+        """Create and log an observational production slate with propensities."""
+        from ..recommend import Filters, recommend
+
+        with store.session() as con:
+            # Recommendations are derived from the event log on every call;
+            # do not persist a transient model merely to create a slate.
+            model = engine.fit(con, save=False)
+            if model is None:
+                raise HTTPException(409, "at least three explicit verdicts are needed before recommendations")
+            fs = engine.features(con)
+            meta = engine.meta(con)
+            slate_id = store.new_slate_id()
+            recs = recommend(
+                model, fs, meta, k=max(1, min(k, 20)), strategy="thompson",
+                filters=Filters(exclude=frozenset(store.interacted(con))),
+            )
+            store.log_impressions(
+                con, slate_id,
+                [(r.item_id, r.position, r.score, r.propensity, r.explored) for r in recs],
+                policy="bayesian-thompson-v1",
+            )
+        return {
+            "slate_id": slate_id,
+            "observational": True,
+            "items": [{**_present(meta[r.item_id]), "score": r.mean * 10.0, "std": r.std * 10.0,
+                       "propensity": r.propensity, "explored": r.explored} for r in recs],
         }
 
     @app.get("/api/search")

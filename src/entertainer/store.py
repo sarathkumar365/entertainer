@@ -84,6 +84,34 @@ CREATE TABLE IF NOT EXISTS meta (
     value VARCHAR
 );
 
+-- A validation case is immutable at prediction time.  The ordinary events
+-- table remains the source of truth for training; this table is only the
+-- evidence ledger that makes later claims checkable.
+CREATE TABLE IF NOT EXISTS validation_batches (
+    batch_id       VARCHAR PRIMARY KEY,
+    created_at     TIMESTAMP,
+    item_ids       VARCHAR,           -- JSON list; all titles chosen before reveal
+    full_ranking   VARCHAR,           -- JSON item ids, best first
+    ridge_ranking  VARCHAR,
+    manifest_id    VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS validation_cases (
+    case_id          VARCHAR PRIMARY KEY,
+    batch_id         VARCHAR NOT NULL,
+    item_id          INTEGER NOT NULL UNIQUE,
+    sealed_at        TIMESTAMP,
+    full_score       DOUBLE NOT NULL,
+    full_std         DOUBLE NOT NULL,
+    full_like_prob   DOUBLE NOT NULL,
+    ridge_score      DOUBLE NOT NULL,
+    ridge_like_prob  DOUBLE NOT NULL,
+    status           VARCHAR NOT NULL DEFAULT 'sealed', -- sealed | revealed | unseen
+    actual_reward    DOUBLE,
+    actual_verdict   VARCHAR,
+    revealed_at      TIMESTAMP
+);
+
 CREATE SEQUENCE IF NOT EXISTS event_seq START 1;
 CREATE SEQUENCE IF NOT EXISTS impression_seq START 1;
 """

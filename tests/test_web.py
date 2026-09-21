@@ -211,6 +211,62 @@ def test_progress_breaks_down_by_language(client):
     assert sum(row["count"] for row in p["by_language"]) == 6
 
 
+def test_invalid_bearer_falls_back_to_api_key(monkeypatch):
+    """A pasted smart quote must not turn a valid local setup into a 500."""
+    from entertainer.data import tmdb
+
+    monkeypatch.setenv("TMDB_API_KEY", "a" * 32)
+    monkeypatch.setenv("TMDB_BEARER", "bad–token")
+    headers, params = tmdb._auth()
+    assert "Authorization" not in headers
+    assert params["api_key"] == "a" * 32
+
+
+def test_sealed_validation_preserves_predictions_before_reveal(client):
+    feed = client.get("/api/feed?years=4&limit=12").json()["items"]
+    for item in feed[:3]:
+        assert client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"}).json()["ok"]
+
+    sealed = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:7]]})
+    assert sealed.status_code == 200
+    cases = sealed.json()["cases"]
+    assert len(cases) == 4
+
+    assert client.post("/api/rate", json={"item_id": feed[3]["item_id"], "verdict": "love"}).status_code == 400
+
+    # A validation title is now protected from accidental direct rating.
+    duplicate = client.post("/api/validation/seal", json={"item_ids": [x["item_id"] for x in feed[3:5]]})
+    assert duplicate.status_code == 400
+
+    for case in cases:
+        revealed = client.post(f"/api/validation/{case['case_id']}/reveal", json={"verdict": "love"})
+        assert revealed.json()["status"] == "revealed"
+
+    # A second reveal would mutate the sealed experiment and is forbidden.
+    assert client.post(f"/api/validation/{cases[0]['case_id']}/reveal", json={"verdict": "meh"}).status_code == 400
+    report = client.get("/api/validation/summary").json()
+    assert report["completed_cases"] == 4
+    assert report["full"]["top10_hit_rate"] == 1.0
+    assert report["full"]["top10_hit_rate_ci95"] is not None
+
+
+def test_prediction_and_logged_recommendation_slate(client):
+    feed = client.get("/api/feed?years=4&limit=10").json()["items"]
+    for item in feed[:3]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+
+    prediction = client.get(f"/api/predict/{feed[3]['item_id']}")
+    assert prediction.status_code == 200
+    assert 0 <= prediction.json()["score"] <= 10
+    assert prediction.json()["interval_low"] <= prediction.json()["interval_high"]
+
+    slate = client.post("/api/recommendations/slate?k=4")
+    assert slate.status_code == 200
+    assert slate.json()["observational"] is True
+    assert len(slate.json()["items"]) == 4
+    assert client.get("/api/progress").json()["events"] == 3
+
+
 def test_token_gate_rejects_unauthenticated_requests(tmp_path, monkeypatch, client):
     """Off the loopback interface the page is somebody else's write access."""
     from entertainer.web import app as webapp
