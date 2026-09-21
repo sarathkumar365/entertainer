@@ -22,6 +22,8 @@ import httpx
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
+from ..config import TMDB_API_BASE, tmdb_credentials
+
 _console = Console()
 
 
@@ -42,7 +44,7 @@ def _tick(done: int, total: int, started: float, label: str) -> None:
         flush=True,
     )
 
-from ..config import TMDB_API_BASE, tmdb_credentials
+
 
 # TMDB publishes no hard public rate limit any more but asks for restraint.
 # 40 concurrent requests sits comfortably under the point where 429s appear.
