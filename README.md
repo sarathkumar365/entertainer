@@ -5,6 +5,10 @@ like from **titles and verdicts alone** — no genres, no tags, no explaining
 yourself — across English, Malayalam, Tamil, Telugu, Kannada, Korean,
 Japanese, European and other catalogues.
 
+> **New here?** Read [How Entertainer learns your taste](docs/HOW_IT_WORKS.md)
+> for a plain-English tour of the data, model, predictions, and evaluation
+> process. It is the best place to start before the technical details below.
+
 ```bash
 ent loved "Kumbalangi Nights"
 ent hated  "Morbius"
