@@ -19,8 +19,8 @@ import datetime as dt
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -74,9 +74,36 @@ class AddRequest(BaseModel):
     verdict: str | None = None
 
 
-def create_app() -> FastAPI:
+def create_app(token: str | None = None) -> FastAPI:
+    """Build the app. A token is required once it is bound off localhost.
+
+    The interface writes to the verdict log and can pull titles from TMDB, so
+    on anything but the loopback interface it needs a shared secret. This is
+    a single-user tool on a home network, not a service — a token in the URL
+    is the right weight of protection, and the alternative people actually
+    reach for is no protection at all.
+    """
     app = FastAPI(title="entertainer", docs_url=None, redoc_url=None)
     engine = Engine()
+
+    if token:
+
+        @app.middleware("http")
+        async def require_token(request: Request, call_next):
+            supplied = (
+                request.query_params.get("token")
+                or request.headers.get("x-entertainer-token")
+                or request.cookies.get("entertainer_token")
+            )
+            if supplied != token:
+                return JSONResponse({"detail": "bad or missing token"}, status_code=401)
+            response = await call_next(request)
+            if request.query_params.get("token") == token:
+                # Set once from the initial link so in-page fetches carry it.
+                response.set_cookie(
+                    "entertainer_token", token, httponly=True, samesite="lax"
+                )
+            return response
 
     @app.get("/")
     def index() -> FileResponse:

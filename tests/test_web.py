@@ -209,3 +209,38 @@ def test_progress_breaks_down_by_language(client):
     p = client.get("/api/progress").json()
     assert p["rated"] == 6
     assert sum(row["count"] for row in p["by_language"]) == 6
+
+
+def test_token_gate_rejects_unauthenticated_requests(tmp_path, monkeypatch, client):
+    """Off the loopback interface the page is somebody else's write access."""
+    from entertainer.web import app as webapp
+
+    guarded = TestClient(webapp.create_app(token="s3cret"))
+    assert guarded.get("/api/progress").status_code == 401
+    assert guarded.get("/api/feed").status_code == 401
+    assert guarded.post("/api/rate", json={"item_id": 0, "verdict": "love"}).status_code == 401
+
+
+def test_token_in_the_query_string_authenticates_and_sets_a_cookie(client):
+    from entertainer.web import app as webapp
+
+    guarded = TestClient(webapp.create_app(token="s3cret"))
+    r = guarded.get("/api/progress?token=s3cret")
+    assert r.status_code == 200
+    assert "entertainer_token" in r.cookies or "entertainer_token" in r.headers.get(
+        "set-cookie", ""
+    )
+    # The cookie carries subsequent in-page fetches.
+    assert guarded.get("/api/progress").status_code == 200
+
+
+def test_token_header_also_works(client):
+    from entertainer.web import app as webapp
+
+    guarded = TestClient(webapp.create_app(token="s3cret"))
+    r = guarded.get("/api/progress", headers={"x-entertainer-token": "s3cret"})
+    assert r.status_code == 200
+
+
+def test_no_token_means_no_gate(client):
+    assert client.get("/api/progress").status_code == 200

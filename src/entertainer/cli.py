@@ -1041,7 +1041,11 @@ def _next_step(present: dict[str, bool], n_ratings: int) -> str:
 @app.command()
 def rate(
     port: int = typer.Option(8756, help="Port to serve on."),
-    host: str = typer.Option("127.0.0.1", help="Bind address. Localhost by design."),
+    host: str = typer.Option("127.0.0.1", help="Bind address. Localhost by default."),
+    lan: bool = typer.Option(
+        False, help="Bind to all interfaces so another device on the network can reach it."
+    ),
+    token: str = typer.Option("", help="Shared secret. Generated automatically when --lan."),
     open_browser: bool = typer.Option(True, "--open/--no-open"),
 ) -> None:
     """Open the rating interface — a grid of posters you click through.
@@ -1062,24 +1066,56 @@ def rate(
 
     from .web.app import create_app
 
-    url = f"http://{host}:{port}"
+    if lan:
+        host = "0.0.0.0"  # noqa: S104 - deliberate, and gated behind a token
+    off_loopback = host not in ("127.0.0.1", "localhost", "::1")
+
+    # A token is mandatory off the loopback interface. The page writes to the
+    # verdict log, so an unauthenticated copy on a shared network is somebody
+    # else's write access to your taste profile.
+    if off_loopback and not token:
+        import secrets
+
+        token = secrets.token_urlsafe(12)
+
+    display_host = host
+    if host == "0.0.0.0":  # noqa: S104
+        import socket
+
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            display_host = probe.getsockname()[0]
+            probe.close()
+        except OSError:
+            display_host = "localhost"
+
+    url = f"http://{display_host}:{port}"
+    if token:
+        url += f"?token={token}"
     console.print(
         Panel.fit(
             f"[bold]{url}[/bold]\n\n"
             "[bold]♥[/bold] loved   [bold]+[/bold] liked   [bold]~[/bold] fine   "
             "[bold]−[/bold] disliked   [bold]?[/bold] not seen\n"
             "search finds anything TMDB knows, even outside the catalogue\n\n"
-            "[dim]ctrl-c to stop · nothing leaves this machine[/dim]",
+            + (
+                "[yellow]reachable on your local network — the link above "
+                "contains its access token[/yellow]\n"
+                if off_loopback
+                else ""
+            )
+            + "[dim]ctrl-c to stop · nothing leaves this machine[/dim]",
             title="rate what you have seen",
             border_style="cyan",
         )
     )
-    if open_browser:
+    if open_browser and not off_loopback:
         import threading
         import webbrowser
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+    uvicorn.run(create_app(token=token or None), host=host, port=port, log_level="warning")
 
 
 @app.command()
