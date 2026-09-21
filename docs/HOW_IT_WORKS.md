@@ -1,325 +1,181 @@
-# How Entertainer learns your taste
+# The story of how Entertainer learns your taste
 
-This is a local movie and TV recommender. Think of it as a small private
-research assistant: you show it films you have watched, it looks for patterns,
-and it makes its best next suggestions while being honest about uncertainty.
+Imagine the feature we want to build is simple to describe:
 
-## The short version
+> “I tell the app what I liked. It should help me choose what to watch next, explain how confident it is, and eventually prove whether it is helping.”
 
-```mermaid
-flowchart TD
-    rate[You rate a film] --> event[App saves a local DuckDB event]
-    event --> compare[Model compares the film with the catalogue]
-    compare --> fit[Update the current taste estimate]
-    fit --> rank[Rank unseen titles with confidence]
-```
+That promise is one feature from the outside. Inside, it is a chain of smaller capabilities that must be built in order. A recommendation cannot exist until films can be compared. Films cannot be compared until their information is turned into a common format. A personal prediction cannot exist until your opinions are safely recorded. And none of it should be trusted until it is tested without letting the model rewrite history.
 
-The saved rating history is the source of truth. The model can always be
-rebuilt from it, so it cannot quietly forget a rating or learn from a hidden
-copy of your data.
+This guide follows that chain.
 
-## System map: the parts and their hand-offs
+## Chapter 1 — First, we need a world to recommend from
 
-There are two connected systems: a **slow catalogue factory** that builds the
-shared film map, and a **fast personal loop** that learns from your ratings.
-The factory runs occasionally; the personal loop runs whenever you rate or ask
-for recommendations.
+Before machine learning enters the picture, the app must answer: “what films and shows do we know about?” A small list of popular English titles would be easy to build, but it would fail the product promise for Malayalam, Tamil, Telugu, Korean, Japanese, and other cinema. So our first job is to make a broad local catalogue.
 
-```mermaid
+~~~mermaid
 flowchart LR
-    imdb[IMDb] --> catalogue[Catalogue builder]
-    tmdb[TMDB] --> catalogue
-    catalogue --> cards[Item cards]
-    cards --> embeddings[Text embeddings]
-    movieLens[MovieLens] --> als[iALS collaboration]
-    embeddings --> fused[Fused film map]
-    als --> fused
-    als --> population[Population prior]
-
-    web[Feedback web app] --> events[Local event log]
-    events --> taste[Bayesian taste fit]
-    fused --> taste
-    population --> taste
-    taste --> ranker[Ranker]
-    ranker --> slate[Recommendations]
-    slate --> events
-```
-
-| Component | Why it is needed | How it is implemented | It hands off to |
-| --- | --- | --- | --- |
-| Feedback web app | Lets you give quick, low-friction verdicts and see what was saved | FastAPI backend with a small local HTML/JS interface | Local event log |
-| Event log | Preserves the complete history; a rating is never only an in-memory click | DuckDB `events` table; latest explicit verdict per title is used when fitting | Personal model and exports |
-| Catalogue builder | Gives every film a stable identity and usable metadata | Polars reads IMDb TSV files; DuckDB stores the resulting title table | Item cards and search/feed |
-| TMDB enrichment | Supplies detail IMDb lacks, especially synopsis and original language | Async HTTP client, batched and resumable; results stored beside each title | Language pruning and item cards |
-| Item cards / embeddings | Turns human-readable film information into comparable numbers | A multilingual Qwen encoder converts one compact text card per title into vectors | Fused film map |
-| Collaborative filtering | Captures audience relationships that summaries do not say explicitly | iALS factorises the MovieLens user–title matrix; held-out users are excluded | Fused film map and population prior |
-| Fused film map | Provides one common coordinate system for every title | Content and collaborative vectors are combined, confidence-aware, then reduced with PCA | Personal model, similar-title search, ranker |
-| Bayesian taste fit | Learns what *you* tend to like while measuring uncertainty | Closed-form Bayesian ridge regression, optionally with an evidence-selected non-linear lift | Ranker, score/confidence display |
-| Ranker | Produces a useful top-ten rather than ten clones | Filters candidates, scores them, adds measured exploration, diversifies with MMR, logs propensities | Recommendation slate |
-| Sealed validation | Checks personal performance without changing a prediction after the fact | Saves both full-model and ridge predictions before your verdict is revealed | Immutable evidence reports |
-| Manifests and reports | Make results auditable and comparable over time | JSON records with hashes, settings, seeds, split IDs, and timestamps | Dashboard/export |
-
-### What depends on what
-
-The feedback app can run in a lightweight live mode with only TMDB access. It
-can save ratings, show rated titles, and avoid showing them again. But it
-cannot make full personalized recommendations until the catalogue factory has
-created the embeddings and fused film map.
-
-```mermaid
-flowchart TD
-    ratings[Ratings alone] --> history[Saved history only]
-    catalogue[Catalogue plus embeddings plus fusion] --> comparable[Titles can be compared]
-    comparable --> minimum[At least 3 ratings]
-    minimum --> prediction[Personal score and uncertainty]
-    prediction --> sealed[Sealed outcomes]
-    sealed --> evidence[30: preliminary; 100: keep full model or simplify]
-```
-
-This separation is intentional. Your personal data remains small and local,
-while the expensive public-data work can be rebuilt, moved as a bundle, or
-replaced without rewriting what you watched and how you rated it.
-
-## A story: you rate a film
-
-Imagine you rate *Kumbalangi Nights* as **love**.
-
-1. The feedback page saves that verdict, time, and title identifier in your
-   local `data/entertainer.duckdb` file.
-2. That title already has a compact numeric "fingerprint." It represents
-   clues from its synopsis, cast, language, themes, and how MovieLens viewers
-   connected it with other titles.
-3. The model moves its internal taste pointer slightly towards fingerprints
-   similar to that film. A **dislike** moves it in the other direction.
-4. It compares the taste pointer with every unseen title fingerprint. Titles
-   nearest the pointer get higher predicted scores.
-5. It also calculates uncertainty. A confident recommendation is safer; an
-   uncertain one may be included because your answer would teach the model.
-
-This is not a rule that says “you like Malayalam films, show Malayalam films.”
-Language, format, year, and runtime can be hard filters when you request them.
-Otherwise the model learns from the film as a whole.
-
-## Where the catalogue comes from
-
-```mermaid
-flowchart LR
-    imdb[IMDb bulk data] --> base[Titles, years, people, vote counts]
-    tmdb[TMDB public API] --> enrich[Synopsis, poster, language, keywords]
-    movieLens[MovieLens-32M] --> patterns[Audience connection patterns]
+    imdb[IMDb] --> base[Base catalogue]
+    tmdb[TMDB] --> enrich[Enriched film details]
+    movieLens[MovieLens] --> audience[Audience connection data]
     base --> catalogue[Local catalogue]
     enrich --> catalogue
-    patterns --> catalogue
-```
+    audience --> catalogue
+~~~
 
-| Source | What it adds | Why it is used |
-| --- | --- | --- |
-| IMDb | International title coverage, credits, years, and vote counts | A dependable catalogue backbone, including smaller film industries. |
-| TMDB | Summaries, posters, keywords, and original language | A synopsis contains tone and story details that titles and genres miss. |
-| MovieLens-32M | Anonymous public ratings | It reveals relationships between films that text alone cannot describe. |
-| Your ratings | What *you* liked, disliked, or skipped | This is the only data used to personalize recommendations. |
+Each source exists because it fills a different gap:
 
-The build uses TMDB's original-language field before applying language-aware
-quality thresholds. A good Malayalam film naturally receives far fewer global
-votes than a major English release; one global vote threshold would unfairly
-discard it.
+- **IMDb** gives stable title IDs, years, credits, and broad international coverage. It answers “what exists?”
+- **TMDB** gives synopses, posters, keywords, and original language. It answers “what is this film like?”
+- **MovieLens-32M** gives millions of anonymous public ratings. It answers “which titles tend to be enjoyed by similar viewers?”
+- **Your ratings** remain separate. They answer “what does this person like?”
 
-## How a film becomes numbers
+A technical implication matters here. A highly regarded Malayalam film naturally has fewer global votes than a major English release. If we used one worldwide popularity cutoff, we would silently remove the former. Therefore, the pipeline learns each title’s original language from TMDB and applies language-aware quality thresholds.
 
-Computers cannot compare a plot summary directly. They need a list of numbers
-called an **embedding**. A helpful mental model is a map: films with similar
-meaning appear near each other.
+At the end of this chapter we have a searchable catalogue. It still does not know that two films are similar, so we build the next capability: a common film map.
 
-```mermaid
+## Chapter 2 — Then, we turn every film into a place on a map
+
+People can read two synopses and recognise that they feel related. A computer needs that relationship expressed as numbers. This numeric description is an **embedding**. The useful mental picture is a map: films with similar meaning should be close together.
+
+~~~mermaid
 flowchart TD
     card[Film card: title, synopsis, cast, language, keywords] --> encoder[Multilingual text encoder]
-    encoder --> content[Content fingerprint: meaning and style]
-    ratings[MovieLens rating patterns] --> collaborative[Collaborative fingerprint: audience behaviour]
-    content --> fused[Fused fingerprint for each film]
+    encoder --> content[Content fingerprint]
+    ratings[MovieLens rating patterns] --> collaborative[Collaborative fingerprint]
+    content --> fused[Fused film map]
     collaborative --> fused
-```
+~~~
 
-The project uses a multilingual Qwen embedding model because the catalogue is
-not English-only. MovieLens ratings are factorised with **implicit alternating
-least squares (iALS)**, a standard technique that finds hidden patterns such
-as “people who enjoyed these films often also enjoy those films.”
+We need two kinds of evidence because either one alone has blind spots.
 
-The fingerprints are fused together. If MovieLens has never seen a title, the
-system estimates its collaborative part from content and marks that estimate
-as less certain. A new or regional title is never treated as if it had the
-same evidence as a widely rated title.
+First, we create a compact text card for each title. A multilingual Qwen embedding model turns it into a **256-number content fingerprint**. This gives an obscure, recent, or regional title a meaningful position even if few people have rated it.
 
-## How the personal model works
+Text cannot capture every connection. Two films can have little in common on the page, yet fans of one often love the other. So we also factorise MovieLens’ user–title matrix with **implicit alternating least squares (iALS)**. That creates **192 collaborative factors** for titles MovieLens knows.
 
-The final personal model is deliberately small. One person may provide
-50–200 ratings, far too little data for a giant neural network to learn
-responsibly.
+Most catalogue titles are not in MovieLens. Instead of pretending they have collaborative evidence, the system estimates the recoverable part from content and marks it lower-confidence. It then combines content and collaborative signals and uses PCA to create one **192-dimensional fused film map**.
 
-It uses **Bayesian ridge regression**. In everyday language:
+This unlocks similar-title search. More importantly, it gives the personal model a shared language in which to understand your ratings.
 
-- It finds directions on the film map that separate titles you liked from
-  titles you did not.
-- It avoids overreacting to a handful of ratings. This restraint is “ridge.”
-- It produces both a prediction and an uncertainty range. Uncertainty is a
-  feature, not a failure.
+## Chapter 3 — Your clicks become durable personal history
 
-### Technical view: what is fitted
+When you press **love**, **like**, **fine**, or **dislike**, the app does not quietly change a mysterious model file. It records an event in a local DuckDB database first. The event log is the source of truth; the model is a repeatable calculation made from that history.
 
-For each rated title, the model receives its fused feature vector `x` and a
-numeric reward `y` (the verdict mapped onto a 0–1 scale). It learns weights
-`w` in the equation `y ≈ xw + noise`. Ridge regularisation keeps `w` small
-unless the ratings contain clear evidence for a direction. The Bayesian form
-keeps a distribution over `w`, rather than only one best vector:
-
-```mermaid
+~~~mermaid
 flowchart LR
-    posterior[Bayesian posterior] --> mean[Posterior mean: expected score]
-    posterior --> covariance[Posterior covariance: score uncertainty]
-    posterior --> noise[Noise precision: irreducible rating variation]
-```
+    click[Feedback click] --> event[Local rating event]
+    event --> history[Complete viewing history]
+    history --> fit[Refit current taste model]
+    fit --> score[Scores and uncertainty]
+~~~
 
-The current feature pipeline uses a 256-dimensional multilingual content
-embedding, 192 iALS collaborative factors (reduced to the 48 most recoverable
-components before fusion), and PCA to form a 192-dimensional fused item space.
-The personal fit also adds an intercept and a few simple metadata features.
-It adds 1,000 *weak*, deterministic sampled negatives from unseen catalogue
-titles: this gives the model contrast without pretending those titles are
-explicit dislikes. Explicit ratings have much more weight; skips have less.
+This design is needed for three reasons:
 
-Older ratings are gently down-weighted with a 1,100-day half-life, so a major
-change in taste can eventually show up without erasing your history.
+1. Refreshing the page cannot erase a rating; it is in the local database.
+2. Changing your mind creates a later event; the latest explicit verdict becomes the current label.
+3. When we improve the model, we can rebuild it from the same history and compare fairly.
 
-The production model may add a carefully checked non-linear lift using random
-Fourier features and a population prior derived from MovieLens. It is compared
-with a plain ridge model on exactly the same personal validation cases. If the
-complex model cannot prove it is better after 100 completed blind cases, the
-application should simplify back to ridge.
+The feedback app can work before the full catalogue build finishes: it can save ratings, show a rated view, and keep rated titles out of the feedback feed. Full personal recommendations must wait for the fused film map from Chapter 2.
 
-```mermaid
+## Chapter 4 — The model turns history into a taste estimate
+
+We now have the two ingredients needed for personal prediction: your verdicts and a numeric fingerprint for every film. The next question is: “which directions on the film map explain what you tend to enjoy?”
+
+~~~mermaid
 flowchart LR
-    ratings[Saved ratings] --> model[Bayesian personal model]
-    fingerprints[Film fingerprints] --> model
+    ratings[Saved ratings] --> model[Bayesian taste model]
+    map[Fused film map] --> model
     model --> score[Predicted score: 0 to 10]
     model --> likelihood[Chance you will like it]
     model --> uncertainty[Uncertainty range]
     model --> ranking[Recommendation ranking]
-```
+~~~
 
-“Like” means a `love` or `like` verdict. Score prediction is kept separately
-because it preserves more detail than a simple yes/no answer.
+The core model is **Bayesian ridge regression**.
 
-## Why some recommendations are surprising
+- **Regression** means it learns a numeric preference score.
+- **Ridge** means it is restrained: a few ratings should not make it invent a dramatic story about you.
+- **Bayesian** means it keeps uncertainty, not only one confident answer.
 
-Most recommendations use the best estimated score. A few can be chosen by
-**Thompson sampling**, which means selecting one plausible version of your
-taste rather than always choosing the safest average guess. This lets the app
-discover a new corner of your taste without filling the whole slate with
-experiments. Exploratory suggestions are labelled as such.
+Technically, each rated title supplies a feature vector x and a reward y, where the verdict is mapped to a 0–1 scale. The model learns weights w:
 
-### Technical view: making a slate
+    preference approximately equals x dot w plus noise
 
-The recommender does not simply sort every title by score. It first removes
-titles you have rated or dismissed, then applies hard filters such as language,
-film/series, year, and runtime. It scores the remaining candidates, retains a
-shortlist, calculates uncertainty only where it can affect the outcome, and
-uses maximal marginal relevance (MMR) to avoid ten near-duplicates. A soft
-per-language cap prevents a multilingual catalogue collapsing into one
-language. Each displayed item logs its score, uncertainty, policy, and
-propensity (its chance of being shown), which is needed for later analysis.
+The posterior mean of w produces an expected score. Its covariance produces the uncertainty range. The fit is closed-form, so it can be rebuilt from your small history in milliseconds.
 
-## The complete build pipeline
+A few protections make that fit behave sensibly:
 
-`ent setup` runs these stages locally. It is resumable: completed downloads
-and artifacts are reused rather than restarted.
+- Recent ratings count a little more, with a 1,100-day half-life. Old opinions still matter, but cannot freeze your taste forever.
+- Skips are weak negative evidence: “not tonight” is not “bad.”
+- The model adds 1,000 weak, deterministic samples from unseen titles. This gives contrast to a history full of films you chose to watch, without pretending unseen titles are explicit dislikes.
+- A MovieLens-derived population prior makes the first few ratings less random. As your own evidence grows, its influence fades.
+- A random-Fourier-feature lift can add gentle non-linearity, but only when marginal likelihood says the real number of ratings supports extra complexity.
 
-```mermaid
+That final guardrail is important. The project does not assume the more complex model is better; plain ridge remains a serious competing model.
+
+## Chapter 5 — A taste estimate becomes a useful top ten
+
+A high predicted score alone does not make a good slate. The system must obey your constraints, avoid repeats, avoid ten near-identical films, and sometimes learn something new.
+
+~~~mermaid
 flowchart TD
-    preflight[1. Check disk and credentials] --> download[2. Download IMDb and MovieLens]
-    download --> catalogue[3. Build catalogue and preserve ratings by IMDb ID]
-    catalogue --> enrich[4. Enrich from TMDB]
-    enrich --> prune[5. Apply language-aware pruning]
-    prune --> encode[6. Create multilingual embeddings]
-    encode --> cf[7. Learn MovieLens collaborative factors]
-    cf --> fuse[8. Fuse item spaces]
-    fuse --> prior[9. Fit population prior]
-    prior --> manifest[10. Write immutable build manifest]
-```
+    map[Fused film map] --> candidates[Unseen candidate titles]
+    filters[Language, format, year, runtime filters] --> candidates
+    candidates --> scoring[Score with taste posterior]
+    scoring --> shortlist[Keep strongest shortlist]
+    shortlist --> diversify[Diversify with MMR]
+    diversify --> slate[Top-ten recommendation slate]
+    slate --> log[Log score, uncertainty, policy, propensity]
+~~~
 
-The first full build is intentionally slow because it processes a large public
-catalogue. Rating and prediction are fast after artifacts exist: the personal
-model refits from your small local history in milliseconds.
+The ranker removes titles you already rated or dismissed. It applies hard filters—such as Malayalam only, movies only, or under two hours—before scoring. A hard requirement should never become a vague preference.
 
-### What makes a build reproducible
+It then scores candidates using either the posterior mean (the safe ranking) or **Thompson sampling**. Thompson sampling draws one plausible version of your taste from the uncertainty distribution. This creates measured exploration: a surprising title can appear because it may fit and because your future verdict would teach the system something.
 
-Each build and evaluation writes an immutable manifest. It records source and
-artifact hashes, catalogue composition, model settings, frozen MovieLens test
-users, random seeds, split identifiers, and timestamps. A later report can
-therefore say which exact inputs generated a result instead of relying on a
-memory of what ran.
+Finally, maximal marginal relevance (MMR) trades a little score for variety. That prevents a top ten made of near-duplicates. Every displayed title logs its score, uncertainty, selection policy, and propensity—the chance it had of being shown—so later results can be interpreted honestly.
 
-## How we check whether it is helping
+## Chapter 6 — We do not call it good until it survives a fair test
 
-The project has two different checks.
+At this point the system can make recommendations. That is not proof that it is useful. We need two tests because they answer different questions.
 
-### Offline check: MovieLens replay
+The **offline MovieLens replay** asks whether the engineering method works in a controlled public-data simulation. Some MovieLens users are held out of collaborative training, treated as new users, and compared with simple baselines. It protects against leakage, but cannot prove the model knows *your* taste.
 
-Some MovieLens users are held completely out of collaborative training, then
-treated as new users. Competing methods receive the same known ratings and
-their ranking quality is compared. This checks the engineering method, but it
-cannot prove the model understands *your* taste.
+The **sealed hidden-pool validation** asks the personal question. You add films you have watched but have not rated. Before seeing your answer, the app saves the full model’s and ridge model’s predictions and rankings. Then you reveal the verdict.
 
-### Personal check: sealed hidden-pool validation
-
-You add films you have already watched but have not rated. Before any verdict
-is revealed, the app seals predictions and rankings from both the full model
-and ridge baseline. Only then do you reveal what you thought.
-
-```mermaid
+~~~mermaid
 flowchart TD
-    pool[Choose watched, unrated titles] --> seal[Seal both models' predictions and rankings]
+    pool[Choose watched, unrated titles] --> seal[Seal full-model and ridge predictions]
     seal --> reveal[Reveal verdicts one by one]
     reveal --> compare[Compare saved predictions with reality]
-```
+    compare --> report[Write interval-aware evidence report]
+~~~
 
-Sealed predictions cannot change after seeing the answer. “Not seen” remains
-unresolved and never improves either model’s score. The primary result is
-**Top-10 hit rate**: among titles ranked in a model’s top ten, how often did
-you actually like them? Reports also include score error, calibration, and
-95% confidence intervals. Thirty cases are preliminary; at 100, the full
-model stays only if it proves a positive Top-10 lift over ridge.
+Because the prediction is sealed first, it cannot improve after seeing the answer. “Not seen” stays unresolved and never affects the result.
 
-Real recommendation slates are logged separately. They show whether you
-actually watch and like suggested titles, but are observational rather than a
-randomized experiment.
+The main product metric is **Top-10 hit rate**: among the films a model ranked highest, how often did you actually like them? The report also includes ranking quality (NDCG@10 and precision@10), score error (MAE/RMSE), calibration, and Brier score. Every personal result includes a 95% confidence interval.
 
-### The metrics, without hiding the trade-offs
+Thirty completed hidden-pool outcomes are called preliminary, never trusted. At 100 outcomes, the full model stays only if its paired confidence interval proves a positive Top-10 lift over ridge. If it cannot, the complex population-prior and RFF path should be archived and ridge should serve the same interface instead. That is the system choosing evidence over complexity.
 
-| Metric | What it answers | Why it matters |
-| --- | --- | --- |
-| Top-10 hit rate | Did the model's highest-ranked titles turn out to be liked? | This is the main product question. |
-| NDCG@10 / precision@10 | Did it put good titles near the top? | Ranking order matters more than an average score. |
-| MAE / RMSE | How far were numeric score predictions from your verdicts? | Useful, but secondary to the top of a slate. |
-| Brier score / calibration | When it says “likely to like,” is that probability trustworthy? | Prevents confident-looking but unreliable scores. |
-| 95% confidence interval | How uncertain is the measured result? | Stops a few lucky outcomes being treated as proof. |
+## The entire build story, condensed
 
-## What is stored, and where
+~~~mermaid
+flowchart TD
+    start[We want reliable personal recommendations] --> world[Build a broad, fair film catalogue]
+    world --> map[Turn films into one comparable map]
+    map --> history[Save your ratings as durable local events]
+    history --> taste[Fit a small uncertainty-aware taste model]
+    taste --> slate[Rank, diversify, and log recommendations]
+    slate --> test[Seal predictions and measure outcomes]
+    test --> decision[Keep the full model only if it earns the result]
+~~~
 
-| Item | Location | Purpose |
-| --- | --- | --- |
-| Your rating events | Local DuckDB database | The source of truth for your taste. |
-| Catalogue and model artifacts | Local `data/` directory | Makes recommendations fast after the build. |
-| Build/evaluation manifests | Local `data/reports/manifests/` | Records the exact data and settings used. |
-| TMDB credential | Local `.env` file | Fetches public metadata; it is not committed. |
+## What lives where
 
-Your ratings are not sent to IMDb, TMDB, MovieLens, or a central application
-server. They are deliberately ignored by Git because a rating history is
-personal data. To move it to another computer, use `ent export` and transfer
-the resulting file privately; on the other machine use `ent import` after the
-catalogue is ready.
+Your ratings, catalogue, model artifacts, and evidence reports live under the local data directory. The main database is data/entertainer.duckdb. Build and evaluation manifests record source hashes, artifact checksums, model settings, random seeds, split IDs, and timestamps, so a future result can be traced back to the exact build that produced it.
 
-## A useful expectation
+TMDB credentials live in a local .env file. The app uses TMDB only to fetch public metadata; it does not send ratings to TMDB, IMDb, MovieLens, or a central service. To move your history to another computer, use ent export and ent import privately.
 
-More ratings help, especially a mix of love, like, fine, and dislike. Treat
-early recommendations as informed experiments, not proof. The sealed
-validation process is how the app moves from “an interesting guess” to
-evidence about whether it is genuinely useful for you.
+## What to expect as a user
+
+Early recommendations are informed guesses. A varied mix of **love**, **like**, **fine**, and **dislike** ratings gives the clearest signal. After the full build, the app can score and rank unseen titles; after sealed validation, you can see whether those rankings genuinely beat the simpler baseline.
+
+That is the complete feature: not merely “a model made a list,” but a local system that learns, remembers, recommends, and shows its evidence.
