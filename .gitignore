@@ -26,3 +26,6 @@ venv/
 models_cache/
 *.safetensors
 *.gguf
+
+# encoding shards
+*_shards/

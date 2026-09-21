@@ -106,6 +106,109 @@ def encode_query(text: str, model=None, dim: int = ENCODER_DIM_TARGET) -> np.nda
     return _truncate(vec.astype(np.float32), dim)[0]
 
 
+# --- sharded, resumable encoding -------------------------------------------
+
+SHARD_SIZE = 20_000
+
+
+def _shard_dir(stem: str) -> "Path":
+    from pathlib import Path
+
+    return Path(PATHS.embeddings) / f"{stem}_shards"
+
+
+def encode_resumable(
+    ids: np.ndarray,
+    texts: list[str],
+    batch_size: int = 64,
+    dim: int = ENCODER_DIM_TARGET,
+    stem: str = "content",
+    shard_size: int = SHARD_SIZE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode a whole catalogue, surviving interruption.
+
+    Encoding 270k item cards is roughly forty minutes of GPU time, and it is
+    the one stage with nothing to show for itself until the very end. A
+    dropped SSH session, an OOM, or a laptop lid closing at minute 38 would
+    otherwise cost the entire run.
+
+    Work is therefore written in shards as it completes, and a restart skips
+    what is already on disk. Shards are keyed by the ids they cover, not by
+    position, so a catalogue that changed between runs invalidates only the
+    shards it actually affected rather than silently pairing new ids with old
+    vectors.
+    """
+    import hashlib
+    import json
+
+    directory = _shard_dir(stem)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    model = None
+    parts: list[tuple[np.ndarray, np.ndarray]] = []
+    total = len(ids)
+    reused = 0
+
+    for start in range(0, total, shard_size):
+        chunk_ids = ids[start : start + shard_size]
+        digest = hashlib.sha1(chunk_ids.tobytes()).hexdigest()[:12]
+        path = directory / f"{start:08d}_{digest}.npz"
+
+        if path.exists():
+            try:
+                z = np.load(path)
+                if z["ids"].shape[0] == chunk_ids.shape[0] and z["mat"].shape[1] == dim:
+                    parts.append((z["ids"], z["mat"]))
+                    reused += len(chunk_ids)
+                    continue
+            except Exception:
+                path.unlink(missing_ok=True)
+
+        if model is None:
+            model = load_model()
+        console.print(
+            f"[dim]encoding {start:,}–{min(start + shard_size, total):,} of {total:,}[/dim]"
+        )
+        mat = encode_texts(
+            texts[start : start + shard_size],
+            batch_size=batch_size,
+            dim=dim,
+            model=model,
+            show_progress=True,
+        )
+        # Write to a temporary name first: a shard truncated by the same
+        # interruption this exists to survive would be worse than no shard.
+        tmp = path.with_suffix(".tmp.npz")
+        np.savez(tmp, ids=chunk_ids.astype(np.int32), mat=mat.astype(np.float32))
+        tmp.replace(path)
+        parts.append((chunk_ids.astype(np.int32), mat.astype(np.float32)))
+
+    if reused:
+        console.print(f"[green]reused {reused:,} already-encoded cards[/green]")
+
+    all_ids = np.concatenate([p[0] for p in parts]) if parts else np.zeros(0, dtype=np.int32)
+    all_mat = (
+        np.vstack([p[1] for p in parts]) if parts else np.zeros((0, dim), dtype=np.float32)
+    )
+    (directory / "manifest.json").write_text(
+        json.dumps({"total": int(total), "dim": int(dim), "shard_size": int(shard_size)}),
+        encoding="utf-8",
+    )
+    return all_ids, all_mat
+
+
+def clear_shards(stem: str = "content") -> int:
+    """Delete cached shards. Returns how many were removed."""
+    directory = _shard_dir(stem)
+    if not directory.exists():
+        return 0
+    removed = 0
+    for path in directory.glob("*.npz"):
+        path.unlink()
+        removed += 1
+    return removed
+
+
 def save(ids: np.ndarray, mat: np.ndarray, stem: str = "content") -> None:
     PATHS.ensure()
     np.save(PATHS.embeddings / f"{stem}_ids.npy", ids.astype(np.int32))

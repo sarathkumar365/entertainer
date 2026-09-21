@@ -303,10 +303,17 @@ def data_keywords(
 
 
 @data_app.command("embed")
-def data_embed(batch_size: int = typer.Option(64), limit: int | None = typer.Option(None)) -> None:
-    """Encode every item card with the multilingual text encoder."""
-    import numpy as np
+def data_embed(
+    batch_size: int = typer.Option(64),
+    limit: int | None = typer.Option(None),
+    fresh: bool = typer.Option(False, help="Discard cached shards and re-encode everything."),
+) -> None:
+    """Encode every item card with the multilingual text encoder.
 
+    Resumable: completed shards are written as they finish, so an interrupted
+    run picks up where it stopped rather than repeating forty minutes of GPU
+    work.
+    """
     from .models import encoder
     from .models.itemcard import build_card
 
@@ -323,12 +330,15 @@ def data_embed(batch_size: int = typer.Option(64), limit: int | None = typer.Opt
     if not rows:
         _fail("catalogue is empty")
 
+    if fresh:
+        console.print(f"[dim]cleared {encoder.clear_shards()} cached shards[/dim]")
+
     ids = np.array([r["item_id"] for r in rows], dtype=np.int32)
     cards = [build_card(r) for r in rows]
-    console.print(f"[dim]encoding {len(cards):,} item cards[/dim]")
+    console.print(f"[dim]{len(cards):,} item cards[/dim]")
     console.print(Panel.fit(cards[0], title="example item card", border_style="dim"))
 
-    mat = encoder.encode_texts(cards, batch_size=batch_size)
+    ids, mat = encoder.encode_resumable(ids, cards, batch_size=batch_size)
     encoder.save(ids, mat)
     console.print(f"[green]embeddings: {mat.shape}[/green]")
 
