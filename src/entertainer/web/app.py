@@ -221,15 +221,28 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 LiveRequest(
                     languages=weights,
                     since=since,
-                    limit=max(1, min(limit, 200)),
+                    # Over-fetch because filtering locally saved ratings below
+                    # can remove part of TMDB's first result page.
+                    limit=max(1, min(limit * 3, 200)),
                     page=page + 1,
                     kind=kind or "movie",
                 )
             )
+            with store.session(read_only=True) as con:
+                rated_tmdb = {
+                    int(row[0])
+                    for row in con.execute(
+                        """
+                        SELECT DISTINCT t.tmdb_id FROM events e JOIN titles t USING (item_id)
+                        WHERE e.kind = 'rate' AND t.tmdb_id IS NOT NULL
+                        """
+                    ).fetchall()
+                }
+            items = [it for it in items if int(it.get("tmdb_id") or -1) not in rated_tmdb]
             for it in items:
                 it["poster"] = _poster(it.pop("poster_path", None))
                 it["external"] = True
-            return {"items": items, "live": True}
+            return {"items": items[:limit], "live": True}
 
         req = FeedRequest(
             years=years,
@@ -311,6 +324,36 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 }
                 for t, y, ctx in recent
             ],
+        }
+
+    @app.get("/api/rated")
+    def rated_titles(limit: int = 200) -> dict[str, Any]:
+        """Latest explicit verdict per title, most recently changed first."""
+        with store.session(read_only=True) as con:
+            cur = con.execute(
+                """
+                SELECT t.*, e.value, e.context, e.ts FROM titles t JOIN (
+                    SELECT item_id, value, context, ts,
+                           row_number() OVER (PARTITION BY item_id ORDER BY ts DESC) rn
+                    FROM events WHERE kind = 'rate'
+                ) e USING (item_id)
+                WHERE e.rn = 1 ORDER BY e.ts DESC LIMIT ?
+                """,
+                [max(1, min(limit, 500))],
+            )
+            columns = [d[0] for d in cur.description]
+            rows = [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
+        import json as _json
+
+        return {
+            "items": [
+                {
+                    **_present(row),
+                    "verdict": (_json.loads(row.get("context") or "{}") or {}).get("verdict"),
+                    "rated_at": str(row.get("ts") or ""),
+                }
+                for row in rows
+            ]
         }
 
     @app.post("/api/validation/seal")

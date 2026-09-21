@@ -211,6 +211,14 @@ def test_progress_breaks_down_by_language(client):
     assert sum(row["count"] for row in p["by_language"]) == 6
 
 
+def test_rated_view_returns_latest_saved_verdict(client):
+    item = client.get("/api/feed?years=4&limit=1").json()["items"][0]
+    client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "love"})
+    saved = client.get("/api/rated").json()["items"]
+    assert saved[0]["item_id"] == item["item_id"]
+    assert saved[0]["verdict"] == "love"
+
+
 def test_invalid_bearer_falls_back_to_api_key(monkeypatch):
     """A pasted smart quote must not turn a valid local setup into a 500."""
     from entertainer.data import tmdb
@@ -344,6 +352,26 @@ def test_live_feed_refuses_without_credentials(bare):
     r = c.get("/api/feed")
     assert r.status_code == 400
     assert "TMDB" in r.text
+
+
+def test_live_feed_excludes_titles_already_rated(bare, monkeypatch):
+    """Live TMDB refreshes must honour the local verdict log."""
+    from entertainer import store
+    from entertainer.web import live
+
+    monkeypatch.setenv("TMDB_API_KEY", "a" * 32)
+    con = store.connect()
+    con.execute(
+        "INSERT INTO titles (item_id, imdb_id, tmdb_id, kind, title) VALUES (1, 'tt0000001', 42, 'movie', 'Saved')"
+    )
+    store.log_event(con, 1, "rate", 10.0, "web", {"verdict": "love"})
+    con.close()
+    monkeypatch.setattr(live, "fetch", lambda _req: [
+        {"tmdb_id": 42, "kind": "movie", "title": "Saved", "poster_path": "/a.jpg"},
+        {"tmdb_id": 43, "kind": "movie", "title": "New", "poster_path": "/b.jpg"},
+    ])
+    items = TestClient(bare.create_app(live=True)).get("/api/feed?limit=2").json()["items"]
+    assert [item["tmdb_id"] for item in items] == [43]
 
 
 def test_live_languages_do_not_need_a_catalogue(bare):
