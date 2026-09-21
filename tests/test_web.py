@@ -306,3 +306,35 @@ def test_live_vote_floors_are_calibrated_per_industry():
     assert VOTE_FLOORS["en"] > VOTE_FLOORS["ko"] > VOTE_FLOORS["ml"]
     assert VOTE_FLOORS["kn"] < VOTE_FLOORS["ta"]
     assert all(v > 0 for v in VOTE_FLOORS.values())
+
+
+def test_a_machine_that_never_built_anything_still_serves(tmp_path, monkeypatch):
+    """A read-only connection cannot create the database file.
+
+    On a fresh clone in live mode there is no catalogue by design, but
+    /api/progress and /api/search still open the store read-only — and the
+    first request died with "database does not exist" before the page had
+    rendered anything.
+    """
+    import importlib
+
+    monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "virgin"))
+    from entertainer import config, engine, store
+
+    for mod in (config, store, engine):
+        importlib.reload(mod)
+    from entertainer.web import app as webapp
+    from entertainer.web import live
+
+    importlib.reload(live)
+    importlib.reload(webapp)
+
+    assert not config.PATHS.catalog_db.exists()
+    c = TestClient(webapp.create_app(live=True))
+
+    p = c.get("/api/progress")
+    assert p.status_code == 200, p.text
+    assert p.json()["rated"] == 0
+    assert c.get("/api/search?q=anything").status_code == 200
+    assert c.post("/api/undo").json()["ok"] is False
+    assert c.get("/api/mode").json()["live"] is True

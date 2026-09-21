@@ -99,6 +99,19 @@ MIGRATIONS = (
 
 def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     PATHS.ensure()
+
+    # A read-only connection cannot create the file, so on a machine that has
+    # never run a build the first read fails outright rather than returning
+    # empty results. Create and migrate it first. This matters for the rating
+    # interface in live mode, where there is no catalogue by design but the
+    # verdict log still has to exist.
+    if read_only and not PATHS.catalog_db.exists():
+        bootstrap = duckdb.connect(str(PATHS.catalog_db))
+        bootstrap.execute(SCHEMA)
+        for statement in MIGRATIONS:
+            bootstrap.execute(statement)
+        bootstrap.close()
+
     con = duckdb.connect(str(PATHS.catalog_db), read_only=read_only)
     if not read_only:
         con.execute(SCHEMA)
