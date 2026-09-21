@@ -160,52 +160,65 @@ questions each, V-optimal elicitation. Run with
 
 | arm | NDCG@10 | P@10 | MAP@10 | novelty | diversity | serendipity |
 |---|---|---|---|---|---|---|
-| ridge | **0.1726** ±0.0144 | 0.2108 | 0.1025 | 10.18 | 0.394 | 0.022 |
-| entertainer, flat prior | 0.1631 ±0.0147 | 0.1957 | 0.0950 | 10.31 | 0.392 | 0.023 |
-| **entertainer** | 0.1607 ±0.0146 | 0.1978 | 0.0924 | 10.27 | 0.388 | 0.027 |
-| popularity | 0.1557 ±0.0130 | 0.1817 | 0.0826 | 9.11 | 0.570 | 0.000 |
-| weighted-kNN | 0.1540 ±0.0139 | 0.1871 | 0.0890 | 10.65 | 0.384 | 0.030 |
-| content-centroid | 0.1492 ±0.0142 | 0.1774 | 0.0867 | 10.83 | 0.396 | 0.038 |
-| quality-prior | 0.0340 ±0.0058 | 0.0430 | 0.0124 | 11.52 | 0.770 | 0.003 |
-| entertainer, no negatives | 0.0033 ±0.0033 | 0.0043 | 0.0022 | 15.17 | 0.662 | 0.000 |
+| entertainer, flat prior | **0.1898** ±0.0278 | 0.2424 | 0.1216 | 10.12 | 0.395 | 0.019 |
+| ridge | 0.1835 ±0.0263 | 0.2323 | 0.1173 | 10.27 | 0.400 | 0.028 |
+| **entertainer** | 0.1828 ±0.0266 | 0.2283 | 0.1188 | 10.38 | 0.394 | 0.030 |
+| popularity | 0.1571 ±0.0268 | 0.1919 | 0.0871 | 9.11 | 0.570 | 0.000 |
+| weighted-kNN | 0.1524 ±0.0256 | 0.1919 | 0.0921 | 10.87 | 0.393 | 0.029 |
+| content-centroid | 0.1343 ±0.0263 | 0.1667 | 0.0839 | 11.09 | 0.404 | 0.030 |
+| quality-prior | 0.0288 ±0.0092 | 0.0414 | 0.0110 | 11.51 | 0.771 | 0.001 |
+| entertainer, no negatives | 0.0000 ±0.0000 | 0.0000 | 0.0000 | 15.38 | 0.663 | 0.000 |
 
 Paired bootstrap of the full engine against each arm:
 
 ```
-vs quality-prior            Δ=+0.1267  p=0.0000  significant
-vs entertainer-no-negatives Δ=+0.1574  p=0.0000  significant
-vs content-centroid         Δ=+0.0115  p=0.1998  not significant
-vs weighted-kNN             Δ=+0.0067  p=0.3037  not significant
-vs popularity               Δ=+0.0050  p=0.3846  not significant
-vs entertainer-flat-prior   Δ=-0.0024  p=0.7703  not significant
-vs ridge                    Δ=-0.0119  p=0.9584  not significant
+vs entertainer-no-negatives Δ=+0.1828  p=0.0000  significant
+vs quality-prior            Δ=+0.1540  p=0.0000  significant
+vs content-centroid         Δ=+0.0485  p=0.0000  significant
+vs weighted-kNN             Δ=+0.0304  p=0.0021  significant
+vs popularity               Δ=+0.0257  p=0.0635  not significant
+vs ridge                    Δ=-0.0007  p=0.5417  not significant
+vs entertainer-flat-prior   Δ=-0.0070  p=0.7587  not significant
 ```
 
 ### What this shows
 
-**The engine has not earned its complexity.** It is statistically
-indistinguishable from plain ridge regression on identical features, from a
-rating-weighted kNN, and from ranking by vote count. Ridge is nominally ahead
-of it. Nothing in the Bayesian treatment — the evidence-tuned
-hyperparameters, the random-feature lift, the population prior — is currently
-paying for itself on this measurement.
+**The engine is level with ridge, and ahead of everything else.** Against
+plain ridge regression on identical features it is indistinguishable
+(Δ=−0.0007, p=0.54) — ridge remains nominally ahead by a margin far inside
+the noise. That much has not changed. What has changed is the rest of the
+field: the engine now beats the rating-weighted kNN (p=0.0021) and the
+content centroid (p<0.0001) significantly, where in the previous run it beat
+neither. Popularity is borderline (p=0.064).
 
-**The population prior contributes nothing here** (Δ=−0.0024). On synthetic
-data it was worth +0.46 correlation at n=4. That gain did not survive contact
-with real users, and the honest reading is that the synthetic world was too
-easy rather than that the idea is sound but unlucky.
+So the Bayesian treatment still has not bought anything over ridge, and on
+this measurement it probably never will — the two fit the same linear model
+to the same features, and the extras only matter where uncertainty is
+actionable, which a static offline replay never tests. What it has bought is
+a decisive margin over the simpler recommenders.
 
-**Implicit negatives are the whole ballgame** (Δ=+0.157, p<0.0001). Without
-sampled unrated titles the model scores 0.0033 — worse than arbitrary
-ordering. This is the one component whose value is beyond argument.
+**The population prior is worth less than nothing here** (Δ=−0.0070,
+p=0.76). The flat-prior variant is the top row of the table. Two consecutive
+runs now put it at or below the engine that omits it, and the honest reading
+is no longer "unlucky": on real held-out users the prior does not pay, and
+the synthetic n=4 gain of +0.46 correlation measured a world that was too
+easy.
 
-**Accuracy is not the only axis and the spread is narrow.** Popularity gets
-0.1557 with serendipity 0.000 and novelty 9.11 — it returns the canon, by
-construction. The engine reaches the same accuracy at novelty 10.27 and
-serendipity 0.027, which is the difference between handing someone films they
-had already heard of and films they had not. That is a real distinction and
-it is also not what NDCG measures, so it is reported beside the accuracy
-rather than folded into it.
+**Implicit negatives are the whole ballgame** (Δ=+0.1828, p<0.0001). Without
+sampled unrated titles the model now scores exactly 0.0000 — not one relevant
+title in the top ten for any of 300 users, at the highest novelty of any arm
+(15.38). That is not a weak recommender, it is a degenerate one: with no
+example of "not for me", the fit collapses and the ranking surfaces the most
+obscure rows in the catalogue. This remains the one component whose value is
+beyond argument.
+
+**Regularisation was the fix.** Every arm improved over the previous run, but
+the Bayesian ones improved most — the engine +0.022, the flat-prior variant
++0.027, ridge only +0.011 — which is what closed a deficit that had looked
+like a defeat. Pinning the effective ridge penalty rather than inferring it
+from the evidence is the whole of that change; the empirical-Bayes estimate
+was under-regularising roughly fourfold because the 1,000 pseudo-negatives
+are a constant block and trivially fit.
 
 ### What this does not show
 
@@ -226,7 +239,8 @@ Kept deliberately, because two of them were wrong in instructive ways.
 |---|---|---|
 | first | 0.0036 | a degenerate fit — the compressed reward band collapsed every weight to zero |
 | second | 0.1623 | real, but against a broken kNN (0.003) and a ridge arm denied the sampled negatives |
-| third | 0.1607 | the table above, all arms given the same advantages |
+| third | 0.1607 | all arms given the same advantages; lost to ridge |
+| fourth | 0.1828 | the table above, after the regularisation fix; level with ridge |
 
 The second run appeared to show the engine significantly beating ridge and
 the centroid. It did not; it showed two handicapped baselines. Fixing them

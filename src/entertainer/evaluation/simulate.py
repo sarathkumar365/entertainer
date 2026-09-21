@@ -29,6 +29,7 @@ varying the budget.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -266,7 +267,9 @@ def arm_ridge(fs, meta, keep, answered, k):
     return _rank(m.predict(fs.matrix), keep, fs, k)
 
 
-NEGATIVE_SAMPLES = 1000
+# Overridable so the count can be validated on held-out users rather than
+# tuned on one person's history, where selecting it in-sample proves nothing.
+NEGATIVE_SAMPLES = int(os.environ.get("ENTERTAINER_NEGATIVE_SAMPLES", "1000"))
 
 
 def _with_negatives(fs, ids, rewards, seed=0):
