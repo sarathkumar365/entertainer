@@ -274,6 +274,29 @@ ent setup                # download, build, enrich, embed, factorise, fuse
 ent rate
 ```
 
+## Everyday controls
+
+You do not need to remember ports, background-process commands, or log paths.
+From the project folder, use:
+
+```bash
+./scripts/entertainer start    # recommendation app + Build Studio
+./scripts/entertainer status   # what is running and what model artifacts exist
+./scripts/entertainer logs app # follow the app log (or: studio, build)
+./scripts/entertainer debug    # readiness plus recent app errors
+./scripts/entertainer stop     # stop the managed local services
+```
+
+For a fresh or incomplete model build, use:
+
+```bash
+./scripts/entertainer build
+```
+
+It starts Build Studio at `http://127.0.0.1:8757`, runs the resumable build
+in the foreground, and saves its terminal output under `data/runtime/logs/`.
+The recommendation app is at `http://127.0.0.1:8756` after `start`.
+
 Opens a local page of posters: recent titles that were well received *in
 their own industry*, balanced across languages, with five buttons each —
 loved, liked, fine, disliked, haven't seen. Click through them.
