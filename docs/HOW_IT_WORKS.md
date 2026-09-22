@@ -76,6 +76,47 @@ This design is needed for three reasons:
 
 The feedback app can work before the full catalogue build finishes: it can save ratings, show a rated view, and keep rated titles out of the feedback feed. Full personal recommendations must wait for the fused film map from Chapter 2.
 
+## Interlude — How you operate the system day to day
+
+There are two different moments in the system's life, and separating them
+prevents a lot of confusion.
+
+The first is the **heavy build**. It constructs the shared film map: catalogue,
+embeddings, MovieLens collaboration, fusion, and the optional starting prior.
+It can take a long time, but it is resumable. The second is **using the app**.
+Once the map exists, the app reads your local rating history and quickly refits
+your small personal model whenever it needs a fresh recommendation. It does not
+redo the expensive shared build every time you open the app.
+
+~~~mermaid
+flowchart TD
+    build[One resumable model build] --> artifacts[Local catalogue and model artifacts]
+    artifacts --> use[Start the local app]
+    ratings[Your saved ratings] --> refit[Fast personal refit]
+    artifacts --> refit
+    refit --> slate[Recommendations and predictions]
+    ratings --> next[Later ratings]
+    next --> refit
+~~~
+
+The helper command gives each action a memorable name:
+
+```bash
+./scripts/entertainer build    # heavy resumable build + Build Studio
+./scripts/entertainer start    # app and Build Studio
+./scripts/entertainer status   # process state and available artifacts
+./scripts/entertainer logs app # follow app, studio, or build logs
+./scripts/entertainer debug    # readiness and recent app errors
+./scripts/entertainer stop     # stop the managed local servers
+```
+
+`build` is intentionally foreground work: you can see its terminal output and
+stop it with Ctrl-C; running it again resumes completed stages. `start` is for
+normal use after a build. The helper writes only PID files and logs under
+`data/runtime/`, while ratings and model artifacts remain in their normal local
+data locations. During a build, the local database may be write-locked; this is
+intentional protection against the app and pipeline changing it at once.
+
 ## Chapter 4 — The model turns history into a taste estimate
 
 We now have the two ingredients needed for personal prediction: your verdicts and a numeric fingerprint for every film. The next question is: “which directions on the film map explain what you tend to enjoy?”
