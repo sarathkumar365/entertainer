@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Local control surface for the Entertainer app and its build monitor.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENT="$ROOT/.venv/bin/ent"
+RUNTIME="$ROOT/data/runtime"
+LOGS="$RUNTIME/logs"
+
+require_ent() {
+  if [[ ! -x "$ENT" ]]; then
+    echo "Missing $ENT. Create the environment first: uv pip install -e '.[web]'" >&2
+    exit 1
+  fi
+}
+
+pid_file() { echo "$RUNTIME/$1.pid"; }
+log_file() { echo "$LOGS/$1.log"; }
+
+running() {
+  local file
+  file="$(pid_file "$1")"
+  [[ -f "$file" ]] && kill -0 "$(<"$file")" 2>/dev/null
+}
+
+start_service() {
+  local name="$1"; shift
+  if running "$name"; then
+    echo "$name already running (pid $(<"$(pid_file "$name")"))"
+    return
+  fi
+  rm -f "$(pid_file "$name")"
+  mkdir -p "$LOGS"
+  nohup "$@" >"$(log_file "$name")" 2>&1 &
+  echo $! >"$(pid_file "$name")"
+  echo "started $name (pid $!)"
+}
+
+stop_service() {
+  local name="$1" file
+  file="$(pid_file "$name")"
+  if ! running "$name"; then
+    rm -f "$file"
+    echo "$name is not running"
+    return
+  fi
+  kill "$(<"$file")"
+  rm -f "$file"
+  echo "stopped $name"
+}
+
+status_service() {
+  if running "$1"; then
+    echo "$1: running (pid $(<"$(pid_file "$1")"))"
+  else
+    echo "$1: stopped"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/entertainer <command>
+
+  start       Start the recommendation app and Build Studio.
+  stop        Stop managed local app and Build Studio processes.
+  restart     Restart both local services.
+  status      Show service state and model-artifact readiness.
+  logs [name] Follow app, studio, or build logs (default: app).
+  build       Start Studio if needed, then run the resumable full build.
+  debug       Show model readiness and the last 40 app log lines.
+
+The app is http://127.0.0.1:8756 and Build Studio is http://127.0.0.1:8757.
+EOF
+}
+
+require_ent
+case "${1:-}" in
+  start)
+    start_service studio "$ENT" studio --no-open
+    start_service app "$ENT" rate --no-open
+    echo "App:          http://127.0.0.1:8756"
+    echo "Build Studio: http://127.0.0.1:8757"
+    ;;
+  stop)
+    stop_service app
+    stop_service studio
+    ;;
+  restart)
+    stop_service app
+    stop_service studio
+    start_service studio "$ENT" studio --no-open
+    start_service app "$ENT" rate --no-open
+    echo "App:          http://127.0.0.1:8756"
+    echo "Build Studio: http://127.0.0.1:8757"
+    ;;
+  status)
+    status_service app
+    status_service studio
+    if ! stats_output="$("$ENT" stats 2>&1)"; then
+      echo "Model details are temporarily unavailable while a build owns the local database."
+    else
+      printf '%s\n' "$stats_output"
+    fi
+    ;;
+  logs)
+    name="${2:-app}"
+    case "$name" in app|studio|build) ;; *) echo "logs accepts: app, studio, build" >&2; exit 2;; esac
+    mkdir -p "$LOGS"
+    touch "$(log_file "$name")"
+    tail -n 80 -f "$(log_file "$name")"
+    ;;
+  build)
+    start_service studio "$ENT" studio --no-open
+    mkdir -p "$LOGS"
+    echo "Build Studio: http://127.0.0.1:8757"
+    echo "Running the resumable build. Press Ctrl-C to stop; run this command again to resume."
+    "$ENT" setup 2>&1 | tee "$(log_file build)"
+    ;;
+  debug)
+    if ! stats_output="$("$ENT" stats 2>&1)"; then
+      echo "Model details are temporarily unavailable while a build owns the local database."
+    else
+      printf '%s\n' "$stats_output"
+    fi
+    echo
+    echo "Recent app log:"
+    [[ -f "$(log_file app)" ]] && tail -n 40 "$(log_file app)" || echo "No managed app log yet."
+    ;;
+  *) usage; exit 2;;
+esac

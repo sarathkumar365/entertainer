@@ -274,6 +274,40 @@ ent setup                # download, build, enrich, embed, factorise, fuse
 ent rate
 ```
 
+## Everyday controls
+
+You do not need to remember ports, background-process commands, or log paths.
+From the project folder, use:
+
+```bash
+./scripts/entertainer start    # recommendation app + Build Studio
+./scripts/entertainer status   # what is running and what model artifacts exist
+./scripts/entertainer logs app # follow the app log (or: studio, build)
+./scripts/entertainer debug    # readiness plus recent app errors
+./scripts/entertainer stop     # stop the managed local services
+```
+
+`start` is for using an already-built recommender. It starts two local pages:
+the movie app on `http://127.0.0.1:8756` and Build Studio on
+`http://127.0.0.1:8757`. `stop` only stops processes launched by this helper;
+it never deletes ratings, catalogue data, model artifacts, or reports.
+
+For a fresh or incomplete model build, use:
+
+```bash
+./scripts/entertainer build
+```
+
+It starts Build Studio at `http://127.0.0.1:8757`, runs the resumable build
+in the foreground, and saves its terminal output under `data/runtime/logs/`.
+The recommendation app is at `http://127.0.0.1:8756` after `start`.
+
+While a build is actively writing the catalogue, `status` may say that model
+details are temporarily unavailable. That is normal: DuckDB gives the build
+exclusive write access so it cannot race the app. Build Studio remains the
+right place to watch progress; when the build finishes, `status` will show
+the finished artifacts.
+
 Opens a local page of posters: recent titles that were well received *in
 their own industry*, balanced across languages, with five buttons each —
 loved, liked, fine, disliked, haven't seen. Click through them.
