@@ -1448,9 +1448,14 @@ def audit(
         "error: first vs last", f"{early * 10:.2f} → {late * 10:.2f}",
         "[green]improving[/green]" if late < early else "[yellow]flat or worse[/yellow]",
     )
+    # slope is NaN below the minimum sample, exactly as the rank correlation
+    # is; both must say so rather than printing "+nan per 100 verdicts".
     table.add_row(
-        "learning slope", f"{slope * 100:+.3f} per 100 verdicts",
-        "[green]significant[/green]" if p_slope < 0.05 and slope < 0 else f"p={p_slope:.3f}",
+        "learning slope",
+        f"{slope * 100:+.3f} per 100 verdicts" if slope == slope else "—",
+        ("[green]significant[/green]" if p_slope < 0.05 and slope < 0 else f"p={p_slope:.3f}")
+        if p_slope == p_slope
+        else "need more data",
     )
     table.add_row(
         f"{interval:.0%} interval coverage", f"{res.coverage():.2f}",
