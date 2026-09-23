@@ -233,6 +233,8 @@ def test_publish_creates_a_release_with_the_bundle_and_its_manifest(tmp_path, mo
     assert "--title" in create and "--notes" in create
     assert "content.npy" in done.info.contents  # encodings travel in a release
     assert gh.calls.index(["gh", "repo", "view", "me/builds", "--json", "visibility"]) < gh.calls.index(create)
+    with store.session(read_only=True) as con:
+        assert store.get_meta(con, bundle.BUILD_META) == done.info.manifest["build_id"]
 
 
 def test_repo_defaults_to_the_private_builds_repo(monkeypatch):

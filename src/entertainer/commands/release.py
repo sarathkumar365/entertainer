@@ -105,3 +105,25 @@ def pull(
         f"[green]{result['restored_titles']:,} titles from {plan.tag}[/green]"
         + (f", [dim]{result['preserved_events']} events kept[/dim]" if result.get("preserved_events") else "")
     )
+
+
+@release_app.command("status")
+def release_status(repo: str = typer.Option(None, help=_REPO_HELP)) -> None:
+    """Show whether this machine is set up to build, publish and pull."""
+    from .. import setup_status
+
+    report = setup_status.collect(repo)
+    marks = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]",
+             "missing": "[red]✗[/red]", "unknown": "[dim]?[/dim]"}
+    console.print(f"[dim]{report['repo']} · this machine is a {report['role']} "
+                  f"(set ENTERTAINER_ROLE to change)[/dim]")
+    table = Table(show_header=False, box=None, pad_edge=False)
+    for check in report["checks"]:
+        table.add_row(marks[check["status"]], check["label"], check["detail"])
+    console.print(table)
+    fixes = [c for c in report["checks"] if c["fix"]]
+    if fixes:
+        console.print("\n[bold]to fix[/bold]")
+        for check in fixes:
+            console.print(f"[dim]{check['label']}:[/dim]")
+            console.print(check["fix"], markup=False, soft_wrap=True)

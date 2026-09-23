@@ -118,6 +118,10 @@ def publish(repo: str, tag: str | None = None, notes: str | None = None) -> Publ
                 f"created {m['created_at']} · {', '.join(m['contents'])}"
             ),
         )
+    # This catalogue is now that release, so `ent pull` and the setup checks
+    # on the builder see it as current rather than as an unpublished build.
+    with store.session() as con:
+        store.set_meta(con, bundle.BUILD_META, info.manifest["build_id"])
     return Published(repo=repo, tag=tag, info=info)
 
 
