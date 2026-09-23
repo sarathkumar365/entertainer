@@ -602,3 +602,23 @@ def test_fitting_a_model_writes_inside_the_temp_data_directory(app_env, tmp_path
     )
     assert run(cli, runner, "recs", "-k", "3", "--strategy", "mean").exit_code == 0
     assert (tmp_path / "artifacts" / "taste.npz").exists()
+
+
+def test_every_command_survived_the_split_into_modules(app_env):
+    """A Typer command exists only once its module has been imported and the
+    decorator has run, so the imports in commands/__init__ are load-bearing.
+    Dropping one removes a command silently — `ent --help` simply stops
+    listing it."""
+    cli, runner = app_env
+    listed = run(cli, runner, "--help").output
+
+    for name in (
+        "setup", "preflight", "loved", "liked", "meh", "disliked", "hated",
+        "seen", "dismiss", "bulk", "add", "find", "onboard", "recs", "why",
+        "similar", "forget", "taste", "rate", "studio", "stats", "history",
+        "export", "import", "audit", "eval", "netflix", "data", "bundle",
+    ):
+        assert name in listed, f"`ent {name}` disappeared"
+
+    assert "fetch" in run(cli, runner, "data", "--help").output
+    assert "export" in run(cli, runner, "bundle", "--help").output
