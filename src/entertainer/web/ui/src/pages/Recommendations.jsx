@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import { VERDICTS, api } from "../api";
 import Organism from "../components/Organism";
 import TitleCard from "../components/TitleCard";
+import Unavailable from "../components/Unavailable";
 import { useAsync } from "../useAsync";
 
 /** Recommendations, and the only place a verdict closes the off-policy loop. */
@@ -96,16 +97,7 @@ export default function Recommendations() {
         </div>
       </header>
 
-      {error ? (
-        <div className="empty">
-          <p>{error.message}</p>
-          {error.status === 409 ? (
-            <p>
-              Rate a few titles first: <code>ent onboard</code> or the Rate tab.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+      {error ? <Unavailable error={error} /> : null}
 
       {!error && !loading && items.length === 0 ? (
         <div className="empty">

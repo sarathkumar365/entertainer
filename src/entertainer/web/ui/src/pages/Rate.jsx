@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { VERDICTS, api } from "../api";
 import TitleCard from "../components/TitleCard";
+import Unavailable from "../components/Unavailable";
 import { useAsync } from "../useAsync";
 
 /**
@@ -207,7 +208,7 @@ export default function Rate() {
         </p>
       </details>
 
-      {error ? <p className="error">{error.message}</p> : null}
+      {error ? <Unavailable error={error} /> : null}
       {loading ? <p className="label">loading…</p> : null}
 
       {mode === "grid" ? (

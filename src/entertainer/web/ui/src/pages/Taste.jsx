@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { api } from "../api";
+import Unavailable from "../components/Unavailable";
 import { useAsync } from "../useAsync";
 
 /**
@@ -96,9 +97,7 @@ export default function Taste() {
   if (error) {
     return (
       <div className="page">
-        <div className="empty">
-          <p>{error.message}</p>
-        </div>
+        <Unavailable error={error} />
       </div>
     );
   }

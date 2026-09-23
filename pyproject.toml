@@ -47,8 +47,11 @@ dev = [
 ]
 
 [project.scripts]
-entertainer = "entertainer.cli:app"
-ent = "entertainer.cli:app"
+# `main`, not `app`: the wrapper is what turns a domain error into one red
+# line and a ctrl-c into a quiet exit. Pointing these at the Typer object
+# bypassed both.
+entertainer = "entertainer.cli:main"
+ent = "entertainer.cli:main"
 
 [build-system]
 requires = ["hatchling"]

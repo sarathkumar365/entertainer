@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 
 import { api } from "../api";
+import Unavailable from "../components/Unavailable";
 import { useAsync } from "../useAsync";
 
 /**
@@ -69,7 +70,7 @@ export default function Library() {
   if (error) {
     return (
       <div className="page">
-        <div className="empty">{error.message}</div>
+        <Unavailable error={error} />
       </div>
     );
   }

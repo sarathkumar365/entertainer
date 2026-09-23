@@ -20,6 +20,7 @@ import numpy as np
 
 from . import store
 from .config import PATHS
+from .errors import ModelNotReady
 from .models import fusion
 from .models.features import FeatureSpace
 from .models.features import build as build_features
@@ -90,7 +91,10 @@ class Engine:
         if self._fs is not None:
             return self._fs
         if not fusion.exists():
-            raise RuntimeError("no fused item space; run `entertainer build` first")
+            raise ModelNotReady(
+                "the recommendation model has not been built yet; "
+                "run `ent build` to finish it"
+            )
         art = fusion.load()
         self._fs = build_features(art.item_ids, art.space, self.meta(con))
         return self._fs

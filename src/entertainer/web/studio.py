@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..build_events import list_builds, read_build, read_events
+from .failures import install as install_failure_handlers
 
 STATIC = Path(__file__).parent / "static"
 SETUP_TTL_SECONDS = 60
@@ -18,6 +19,9 @@ SETUP_TTL_SECONDS = 60
 
 def create_studio_app() -> FastAPI:
     app = FastAPI(title="entertainer Build Studio", docs_url=None, redoc_url=None)
+    # The studio is watched during a build, which is exactly when the
+    # readiness checks meet a locked database.
+    install_failure_handlers(app)
 
     @app.get("/")
     def index() -> FileResponse:

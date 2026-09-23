@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { api } from "../api";
 import Organism from "../components/Organism";
+import Unavailable from "../components/Unavailable";
 import { useAsync } from "../useAsync";
 
 /**
@@ -149,10 +150,7 @@ export default function Evidence() {
   if (error) {
     return (
       <div className="page">
-        <div className="empty">
-          <p>{error.message}</p>
-          <p>Give it a few more verdicts and come back.</p>
-        </div>
+        <Unavailable error={error} />
       </div>
     );
   }

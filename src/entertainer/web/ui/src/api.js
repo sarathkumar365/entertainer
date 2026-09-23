@@ -12,14 +12,21 @@ async function request(path, options = {}) {
     ...options,
   });
   if (!response.ok) {
-    let detail = await response.text();
+    const text = await response.text();
+    let detail = text;
+    let code = null;
     try {
-      detail = JSON.parse(detail).detail ?? detail;
+      const body = JSON.parse(text);
+      detail = body.detail ?? text;
+      // The server names the kind of failure so the page does not have to
+      // match on English prose: "model_not_ready", "catalogue_busy", ...
+      code = body.code ?? null;
     } catch {
       /* not JSON; the text is the message */
     }
     const error = new Error(detail || `${response.status}`);
     error.status = response.status;
+    error.code = code;
     throw error;
   }
   return response.json();
