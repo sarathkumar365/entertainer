@@ -94,3 +94,56 @@ def test_tone_is_a_word_not_markup():
     for r in readings(result([0.1] * 10, [0.2] * 10)):
         assert "[" not in r.reading and "[" not in r.value
         assert r.tone in ("", "good", "bad", "warn", "dim")
+
+
+def test_a_model_reports_real_verdicts_not_sampled_negatives():
+    """`ent taste` said "learned from 1166 verdicts" against 169 real ones —
+    n_obs counts the 1000 sampled pseudo-negatives the fit is padded with."""
+    import numpy as np
+
+    from entertainer.models.taste import fit
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 6))
+    y = rng.uniform(size=40)
+    model = fit(X, y, allow_rff=False, capacity_obs=12)
+    assert model.n_obs == 40
+    assert model.n_real == 12
+
+
+def test_n_real_survives_a_save_and_load(tmp_path, monkeypatch):
+    import numpy as np
+
+    from entertainer.models.taste import TasteModel, fit
+
+    rng = np.random.default_rng(0)
+    model = fit(rng.normal(size=(30, 4)), rng.uniform(size=30), allow_rff=False, capacity_obs=7)
+    path = tmp_path / "taste.npz"
+    model.to_npz(path)
+    assert TasteModel.from_npz(path).n_real == 7
+
+
+def test_a_model_saved_before_n_real_existed_still_loads(tmp_path):
+    """Falling back to n_obs is what those files were displaying anyway."""
+    import json
+
+    import numpy as np
+
+    from entertainer.models.taste import TasteModel, fit
+
+    rng = np.random.default_rng(0)
+    model = fit(rng.normal(size=(20, 3)), rng.uniform(size=20), allow_rff=False)
+    path = tmp_path / "old.npz"
+    fm = model.feature_map
+    np.savez_compressed(
+        path,
+        mean=model.mean, cov=model.cov,
+        alpha=np.array([model.alpha]), beta=np.array([model.beta]),
+        n_obs=np.array([model.n_obs]), y_mean=np.array([model.y_mean]),
+        log_evidence=np.array([model.log_evidence]),
+        spec=np.array([json.dumps(fm.to_dict())]),
+        W=fm.W if fm.W is not None else np.zeros(0, dtype=np.float32),
+        b=fm.b if fm.b is not None else np.zeros(0, dtype=np.float32),
+    )
+    loaded = TasteModel.from_npz(path)
+    assert loaded.n_real == loaded.n_obs == model.n_obs

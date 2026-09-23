@@ -797,7 +797,9 @@ def recs(
             con,
             slate,
             [(p.item_id, p.position, p.score, p.propensity, p.explored) for p in picks],
-            policy=f"{strategy}-n{model.n_obs}",
+            # n_real, not n_obs: the policy label should say how many verdicts
+            # were behind the slate, not how many rows the fit happened to see.
+            policy=f"{strategy}-n{model.n_real}",
         )
         # Remembered so a verdict can be given by position rather than by
         # retyping a title.
@@ -965,7 +967,7 @@ def taste(axes: int = typer.Option(6, help="How many latent axes to describe."))
 
     console.print(
         Panel.fit(
-            f"learned from [bold]{model.n_obs}[/bold] verdicts · "
+            f"learned from [bold]{model.n_real}[/bold] verdicts · "
             f"capacity: {'linear' if model.feature_map.n_rff == 0 else f'linear + {model.feature_map.n_rff} RFF'} "
             f"(chosen by marginal likelihood, log Z = {model.log_evidence:.1f})",
             border_style="dim",

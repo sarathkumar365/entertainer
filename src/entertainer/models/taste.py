@@ -156,6 +156,11 @@ class TasteModel:
     alpha: float                # prior precision
     beta: float                 # noise precision
     n_obs: int
+    #: Real verdicts behind the fit, excluding the sampled pseudo-negatives
+    #: that `n_obs` counts. Reporting n_obs to a person overstates how much
+    #: the model has actually been told — 1,000 sampled negatives beside 169
+    #: verdicts reads as "learned from 1,166 verdicts", which is not true.
+    n_real: int
     y_mean: float
     log_evidence: float
     _chol: np.ndarray | None = field(default=None, repr=False)
@@ -214,7 +219,8 @@ class TasteModel:
             path,
             mean=self.mean, cov=self.cov,
             alpha=np.array([self.alpha]), beta=np.array([self.beta]),
-            n_obs=np.array([self.n_obs]), y_mean=np.array([self.y_mean]),
+            n_obs=np.array([self.n_obs]), n_real=np.array([self.n_real]),
+            y_mean=np.array([self.y_mean]),
             log_evidence=np.array([self.log_evidence]),
             spec=np.array([json.dumps(fm.to_dict())]),
             W=fm.W if fm.W is not None else np.zeros(0, dtype=np.float32),
@@ -233,7 +239,11 @@ class TasteModel:
         return cls(
             feature_map=fm, mean=z["mean"], cov=z["cov"],
             alpha=float(z["alpha"][0]), beta=float(z["beta"][0]),
-            n_obs=int(z["n_obs"][0]), y_mean=float(z["y_mean"][0]),
+            n_obs=int(z["n_obs"][0]),
+            # Models saved before n_real existed fall back to n_obs, which is
+            # what they were displaying anyway.
+            n_real=int(z["n_real"][0]) if "n_real" in z else int(z["n_obs"][0]),
+            y_mean=float(z["y_mean"][0]),
             log_evidence=float(z["log_evidence"][0]),
         )
 
@@ -439,7 +449,7 @@ def fit(
 
         model = TasteModel(
             feature_map=fm, mean=mean, cov=cov, alpha=alpha, beta=beta,
-            n_obs=n, y_mean=y_mean, log_evidence=ev,
+            n_obs=n, n_real=effective, y_mean=y_mean, log_evidence=ev,
         )
         if best is None or ev > best.log_evidence:
             best = model
