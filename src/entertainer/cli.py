@@ -622,7 +622,7 @@ def onboard(
     """Cold start: answer a short, adaptively chosen set of questions."""
 
     from .coldstart import elicit
-    from .models.taste import fit as fit_taste
+    from .coldstart.session import ElicitationSession
 
     _require_catalog()
     engine = Engine()
@@ -636,7 +636,6 @@ def onboard(
             _fail("no recognisable titles for those languages")
 
         asked = store.already_asked(con)
-        answered: list[tuple[int, float]] = []
         console.print(
             Panel.fit(
                 "[bold]l[/bold]oved   l[bold]i[/bold]ked   [bold]m[/bold]eh   "
@@ -650,40 +649,17 @@ def onboard(
             "l": "love", "i": "like", "m": "meh", "d": "dislike", "h": "hate",
         }
 
-        batch = elicit.seed_questions(fs, meta, k=max(questions, 24), languages=langs, pool=pool)
-        batch = [b for b in batch if b not in asked]
-        cursor = 0
-        answered_count = 0
+        session = ElicitationSession(
+            fs=fs, meta=meta, pool=pool, asked=asked, languages=langs,
+            prior=engine.prior(con), target=questions,
+        )
+        session.start()
 
-        while answered_count < questions:
-            if cursor >= len(batch):
-                if len(answered) >= 3:
-                    ids = np.array([a[0] for a in answered])
-                    rewards = np.array([a[1] for a in answered])
-                    model = fit_taste(
-                        fs.vectors_for(ids), rewards, allow_rff=False, prior=engine.prior(con)
-                    )
-                    batch = elicit.next_questions(
-                        model, fs, meta, asked, k=16, languages=langs, pool=pool
-                    )
-                else:
-                    batch = [
-                        b
-                        for b in elicit.seed_questions(
-                            fs, meta, k=questions * 3, languages=langs, pool=pool
-                        )
-                        if b not in asked
-                    ]
-                cursor = 0
-                if not batch:
-                    break
-
-            item = batch[cursor]
-            cursor += 1
-            if item in asked:
-                continue
-            asked.add(item)
-            row = meta[item]
+        while not session.finished:
+            question = session.next_question()
+            if question is None:
+                break
+            row = question.row
             label = f"[bold]{row['title']}[/bold]"
             if row.get("original_title") and row["original_title"] != row["title"]:
                 label += f" [dim]({row['original_title']})[/dim]"
@@ -691,7 +667,10 @@ def onboard(
                 str(x) for x in (row.get("year"), language_label(row.get("language")),
                                  "series" if row.get("kind") == "tv" else None) if x
             )
-            console.print(f"\n[cyan]{answered_count + 1}/{questions}[/cyan]  {label}  [dim]{tail}[/dim]")
+            console.print(
+                f"\n[cyan]{session.answered_count + 1}/{questions}[/cyan]  "
+                f"{label}  [dim]{tail}[/dim]"
+            )
             try:
                 key = typer.prompt("", default="n", show_default=False).strip().lower()[:1]
             except (typer.Abort, EOFError):
@@ -701,12 +680,14 @@ def onboard(
             if key not in keymap:
                 # Not a verdict: record that the question was asked so it is
                 # not repeated, without removing the title from circulation.
-                store.log_event(con, item, "unseen", None, "elicit", {"answer": "unseen"})
+                store.log_event(
+                    con, question.item_id, "unseen", None, "elicit", {"answer": "unseen"}
+                )
                 continue
-            reward = engine.record(con, item, keymap[key], source="elicit")
-            answered.append((item, reward))
-            answered_count += 1
+            reward = engine.record(con, question.item_id, keymap[key], source="elicit")
+            session.record(question.item_id, reward)
 
+        answered_count = session.answered_count
         console.print(f"\n[green]{answered_count} verdicts recorded[/green]")
         if answered_count >= 3:
             engine.fit(con)
