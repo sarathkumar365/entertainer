@@ -266,30 +266,13 @@ def data_keywords(
     concurrency: int = typer.Option(40),
 ) -> None:
     """Backfill TMDB keywords for the titles most likely to be encountered."""
-    from .data import tmdb
+    from .data import catalog, tmdb
 
     if not has_tmdb():
         _fail("no TMDB credentials")
     con = store.connect()
-    # Anything with keywords already stored counts as fetched, so a catalogue
-    # enriched before this marker existed is not re-requested wholesale.
-    con.execute(
-        "UPDATE titles SET keywords_at = now() "
-        "WHERE keywords_at IS NULL AND keywords IS NOT NULL AND len(keywords) > 0"
-    )
-    # `top` is a coverage target, not a batch size: "the N most-voted titles
-    # should have keywords". Ranking first and filtering second makes a
-    # resumed run finish the same N rather than moving on to the next N.
-    targets = con.execute(
-        """
-        SELECT item_id, tmdb_id, kind FROM (
-            SELECT item_id, tmdb_id, kind, keywords_at,
-                   row_number() OVER (ORDER BY imdb_votes DESC NULLS LAST) AS rank
-            FROM titles WHERE tmdb_id IS NOT NULL
-        ) WHERE rank <= ? AND keywords_at IS NULL
-        """,
-        [top],
-    ).fetchall()
+    catalog.stamp_existing_keywords(con)
+    targets = catalog.keyword_targets(con, top)
     if not targets:
         console.print("[green]nothing to backfill[/green]")
         con.close()
@@ -308,8 +291,7 @@ def data_keywords(
         written["n"] += len(batch)
 
     try:
-        tmdb.backfill_keywords([(int(a), int(b), c) for a, b, c in targets],
-                               concurrency=concurrency, on_batch=flush)
+        tmdb.backfill_keywords(targets, concurrency=concurrency, on_batch=flush)
     finally:
         con.close()
     console.print(f"[green]keywords for {written['n']:,} titles[/green]")

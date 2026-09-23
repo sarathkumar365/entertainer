@@ -467,3 +467,45 @@ def insert_title(con, row: dict) -> int:
         list(payload.values()),
     )
     return int(next_id)
+
+
+def stamp_existing_keywords(con) -> int:
+    """Treat keywords already stored as fetched.
+
+    A catalogue enriched before ``keywords_at`` existed has keywords but no
+    marker, and without this every one of those titles is requested again —
+    tens of thousands of needless API calls on the first run after upgrading.
+
+    Returns how many rows were marked.
+    """
+    before = con.execute(
+        "SELECT count(*) FROM titles WHERE keywords_at IS NULL "
+        "AND keywords IS NOT NULL AND len(keywords) > 0"
+    ).fetchone()[0]
+    con.execute(
+        "UPDATE titles SET keywords_at = now() "
+        "WHERE keywords_at IS NULL AND keywords IS NOT NULL AND len(keywords) > 0"
+    )
+    return int(before)
+
+
+def keyword_targets(con, top: int) -> list[tuple[int, int, str]]:
+    """Titles among the ``top`` most-voted that still have no keywords.
+
+    ``top`` is a coverage target, not a batch size: the claim is "the N
+    most-voted titles should have keywords". Ranking first and filtering
+    second is what makes that true — filtering first would rank whatever is
+    left, so a resumed run would march on to the next N instead of finishing
+    the same N.
+    """
+    rows = con.execute(
+        """
+        SELECT item_id, tmdb_id, kind FROM (
+            SELECT item_id, tmdb_id, kind, keywords_at,
+                   row_number() OVER (ORDER BY imdb_votes DESC NULLS LAST) AS rank
+            FROM titles WHERE tmdb_id IS NOT NULL
+        ) WHERE rank <= ? AND keywords_at IS NULL
+        """,
+        [top],
+    ).fetchall()
+    return [(int(item_id), int(tmdb_id), kind) for item_id, tmdb_id, kind in rows]
