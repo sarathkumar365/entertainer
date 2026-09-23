@@ -7,7 +7,6 @@ catalogue, so nothing here touches the network or the real event log.
 from __future__ import annotations
 
 import datetime as dt
-import importlib
 
 import numpy as np
 import pytest
@@ -24,18 +23,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("TMDB_API_KEY", raising=False)
     monkeypatch.delenv("TMDB_BEARER", raising=False)
 
-    from entertainer import config, engine, store
+    # No reloading — see the note in config.Paths. ENTERTAINER_DATA_DIR above
+    # is authoritative for every module.
+    from entertainer import config, store
     from entertainer.models import encoder, fusion
-
-    for mod in (config, store, engine, encoder, fusion):
-        importlib.reload(mod)
-    from entertainer import resolve
-    from entertainer.models import features
     from entertainer.web import app as webapp
-    from entertainer.web import feed
-
-    for mod in (features, resolve, feed, webapp):
-        importlib.reload(mod)
 
     config.PATHS.ensure()
     year = dt.date.today().year
@@ -315,18 +307,10 @@ def test_no_token_means_no_gate(client):
 @pytest.fixture()
 def bare(tmp_path, monkeypatch):
     """A machine with no catalogue at all — a fresh clone."""
-    import importlib
-
     monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "bare"))
-    from entertainer import config, engine, store
-
-    for mod in (config, store, engine):
-        importlib.reload(mod)
+    from entertainer import config, store
     from entertainer.web import app as webapp
-    from entertainer.web import live
 
-    importlib.reload(live)
-    importlib.reload(webapp)
     config.PATHS.ensure()
     store.connect().close()
     return webapp
@@ -402,18 +386,9 @@ def test_a_machine_that_never_built_anything_still_serves(tmp_path, monkeypatch)
     first request died with "database does not exist" before the page had
     rendered anything.
     """
-    import importlib
-
     monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "virgin"))
-    from entertainer import config, engine, store
-
-    for mod in (config, store, engine):
-        importlib.reload(mod)
+    from entertainer import config
     from entertainer.web import app as webapp
-    from entertainer.web import live
-
-    importlib.reload(live)
-    importlib.reload(webapp)
 
     assert not config.PATHS.catalog_db.exists()
     c = TestClient(webapp.create_app(live=True))

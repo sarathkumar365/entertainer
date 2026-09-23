@@ -30,7 +30,26 @@ def _data_dir() -> Path:
 
 @dataclass(frozen=True)
 class Paths:
-    root: Path
+    """Where everything lives.
+
+    ``root`` resolves on every access rather than being captured at import.
+    Fifteen modules do ``from .config import PATHS``, which binds the *object*,
+    so reloading this module rebinds only its own name. Any module missing from
+    a test's reload list therefore kept pointing at the real data directory —
+    which is how the suite came to overwrite ``data/artifacts/taste.npz``:
+    ``models.taste`` was never reloaded, so ``Engine.fit(save=True)`` wrote a
+    model fitted on synthetic test titles over the real one.
+
+    Resolving late makes ``ENTERTAINER_DATA_DIR`` authoritative for every
+    module at all times, and removes the need for a reload list at all.
+    Passing a root explicitly still pins it.
+    """
+
+    _root: Path | None = None
+
+    @property
+    def root(self) -> Path:
+        return self._root if self._root is not None else _data_dir()
 
     @property
     def raw(self) -> Path:
@@ -63,7 +82,7 @@ class Paths:
         return self
 
 
-PATHS = Paths(_data_dir())
+PATHS = Paths()
 
 
 # --- Data sources -----------------------------------------------------------

@@ -10,8 +10,6 @@ No network, no GPU, no downloads.
 
 from __future__ import annotations
 
-import importlib
-
 import numpy as np
 import pytest
 from typer.testing import CliRunner
@@ -75,17 +73,12 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.delenv("TMDB_API_KEY", raising=False)
     monkeypatch.delenv("TMDB_BEARER", raising=False)
 
-    from entertainer import config, engine, store
+    # No reloading. PATHS resolves its root on every access, so setting
+    # ENTERTAINER_DATA_DIR above is enough for every module at once. The old
+    # reload list silently omitted models.taste and manifests, which is how
+    # the suite came to overwrite the real taste model.
+    from entertainer import cli, config, store
     from entertainer.models import cf, encoder, fusion
-
-    for mod in (config, store, engine, cf, encoder, fusion):
-        importlib.reload(mod)
-    from entertainer import cli, recommend, resolve
-    from entertainer.coldstart import elicit
-    from entertainer.models import features
-
-    for mod in (features, recommend, resolve, elicit, cli):
-        importlib.reload(mod)
 
     config.PATHS.ensure()
 
@@ -136,8 +129,6 @@ def app_env(tmp_path, monkeypatch):
 
     # A complete artifact set, so `stats` reports a finished pipeline rather
     # than reporting the fixture's own gaps.
-    from entertainer.models import cf
-
     cf.save(ids[: len(TITLES)], latent[: len(TITLES)])
     return cli, CliRunner()
 
@@ -594,3 +585,20 @@ def test_stats_warns_when_the_item_space_is_stale(app_env):
     assert stale.exit_code == 0
     assert "item space covers" in stale.output
     assert "cannot be recommended" in stale.output
+
+
+def test_fitting_a_model_writes_inside_the_temp_data_directory(app_env, tmp_path):
+    """Companion to tests/test_data_directory_containment.py.
+
+    Until ``Paths.root`` resolved lazily this wrote over the real
+    ``data/artifacts/taste.npz``: ``models.taste`` was absent from the
+    fixture's reload list, so it kept the binding it had at import.
+    """
+    cli, runner = app_env
+    teach(
+        cli,
+        runner,
+        [("Kumbalangi Nights", "loved"), ("Jallikattu", "liked"), ("96", "loved")],
+    )
+    assert run(cli, runner, "recs", "-k", "3", "--strategy", "mean").exit_code == 0
+    assert (tmp_path / "artifacts" / "taste.npz").exists()
