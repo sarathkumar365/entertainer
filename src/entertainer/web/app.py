@@ -396,7 +396,7 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     @app.post("/api/recommendations/slate")
     def recommendation_slate(k: int = 10) -> dict[str, Any]:
         """Create and log an observational production slate with propensities."""
-        from ..recommend import Filters, recommend
+        from ..recommend import Filters, produce_slate
 
         with store.session() as con:
             # Recommendations are derived from the event log on every call;
@@ -406,18 +406,18 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 raise HTTPException(409, "at least three explicit verdicts are needed before recommendations")
             fs = engine.features(con)
             meta = engine.meta(con)
-            slate_id = store.new_slate_id()
-            recs = recommend(
-                model, fs, meta, k=max(1, min(k, 20)), strategy="thompson",
+            # remember=False: a slate position exists to be typed at a prompt,
+            # and there is no prompt in a browser. Writing last_slate here
+            # would repoint `ent loved 3` at a slate the terminal never saw.
+            slate = produce_slate(
+                con, model, fs, meta, k=max(1, min(k, 20)),
+                policy="bayesian-thompson-v1", remember=False,
+                strategy="thompson",
                 filters=Filters(exclude=frozenset(store.interacted(con))),
             )
-            store.log_impressions(
-                con, slate_id,
-                [(r.item_id, r.position, r.score, r.propensity, r.explored) for r in recs],
-                policy="bayesian-thompson-v1",
-            )
+            recs = slate.picks
         return {
-            "slate_id": slate_id,
+            "slate_id": slate.slate_id,
             "observational": True,
             "items": [{**_present(meta[r.item_id]), "score": r.mean * 10.0, "std": r.std * 10.0,
                        "propensity": r.propensity, "explored": r.explored} for r in recs],

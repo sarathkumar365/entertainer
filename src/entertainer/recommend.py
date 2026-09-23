@@ -349,3 +349,66 @@ def neighbours(
         if len(out) == k:
             break
     return out
+
+
+@dataclass
+class Slate:
+    """A recommendation slate that has been logged as an observation.
+
+    The slate id matters as much as the picks: every impression is written
+    with the probability the title had of being shown, which is the only
+    thing that makes the off-policy estimate possible later. A slate produced
+    without logging is not comparable to anything.
+    """
+
+    slate_id: str
+    picks: list[Recommendation]
+
+    @property
+    def item_ids(self) -> list[int]:
+        return [p.item_id for p in self.picks]
+
+
+def produce_slate(
+    con,
+    model,
+    fs: FeatureSpace,
+    meta: dict[int, dict],
+    *,
+    k: int = 10,
+    policy: str,
+    filters: Filters | None = None,
+    remember: bool = True,
+    **kwargs,
+) -> Slate:
+    """Recommend, log the impressions, and optionally remember the slate.
+
+    The CLI and the web app both did this, with the impression tuple built by
+    hand at each end. Getting that tuple wrong does not fail loudly — it
+    writes a plausible row with the wrong propensity, and the off-policy
+    estimate is quietly biased from then on.
+
+    ``policy`` is deliberately required rather than defaulted. It is the label
+    the off-policy analysis groups by, so a slate logged under the wrong
+    policy name is worse than one not logged at all. The two callers really
+    do run different policies: the CLI exposes the strategy as a flag, the web
+    app is always Thompson.
+
+    ``remember`` writes the slate to meta so a verdict can be given by
+    position. Only the CLI wants that — there are no positions to type in a
+    browser.
+    """
+    from . import store
+
+    picks = recommend(model, fs, meta, k=k, filters=filters, **kwargs)
+    slate_id = store.new_slate_id()
+    if picks:
+        store.log_impressions(
+            con,
+            slate_id,
+            [(p.item_id, p.position, p.score, p.propensity, p.explored) for p in picks],
+            policy=policy,
+        )
+        if remember:
+            store.set_last_slate(con, [p.item_id for p in picks])
+    return Slate(slate_id=slate_id, picks=picks)
