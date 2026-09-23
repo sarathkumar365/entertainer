@@ -61,6 +61,7 @@ status_service() {
 usage() {
   cat <<'EOF'
 Usage: ./scripts/entertainer <command>
+       ./scripts/entertainer --help
 
   start       Start the recommendation app and Build Studio.
   stop        Stop managed local app and Build Studio processes.
@@ -73,6 +74,13 @@ Usage: ./scripts/entertainer <command>
 
 The app is http://127.0.0.1:8756 and Build Studio is http://127.0.0.1:8757.
 
+This script needs no activated environment: it calls .venv/bin/ent directly.
+The `ent` command itself is only on PATH inside the virtualenv, so run either
+`source .venv/bin/activate` first (source it — it cannot be executed) or
+`./.venv/bin/ent <command>`.
+
+App screens:
+
   /            the model itself
   /recs        recommendations, with each prediction drawn as a distribution
   /rate        poster grid, or a keyboard-driven focus mode
@@ -84,6 +92,10 @@ The interface is a built bundle, committed, so nothing here needs node to
 run. Only editing it does — `ui` rebuilds after a change.
 EOF
 }
+
+case "${1:-}" in
+  -h|--help|help) usage; exit 0;;
+esac
 
 require_ent
 case "${1:-}" in
@@ -147,5 +159,6 @@ case "${1:-}" in
     echo "Recent app log:"
     [[ -f "$(log_file app)" ]] && tail -n 40 "$(log_file app)" || echo "No managed app log yet."
     ;;
-  *) usage; exit 2;;
+  "") usage >&2; exit 2;;
+  *) echo "Unknown command: $1" >&2; echo >&2; usage >&2; exit 2;;
 esac

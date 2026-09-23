@@ -9,6 +9,30 @@
 #   the fused space.
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/finish_build.sh
+       ./scripts/finish_build.sh --help
+
+Runs the rest of the pipeline after TMDB enrichment, in an order that is
+load-bearing: keywords, rebuild, prune, embed, cf, fuse, prior, stats.
+It takes no arguments; environment variables steer it:
+
+  ENT=<path>         The CLI to call. Default: .venv/bin/entertainer
+  LOG_DIR=<path>     Where each step's full log goes. Default: /tmp/entertainer-build
+  ENRICH_PID=<pid>   Wait for this process to exit before starting.
+
+Prefer `./scripts/entertainer build` for a normal full build; this script is
+for resuming a run whose enrichment is already under way.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help|help) usage; exit 0;;
+  "") ;;
+  *) echo "Unknown argument: $1" >&2; echo >&2; usage >&2; exit 2;;
+esac
+
 ENT="${ENT:-.venv/bin/entertainer}"
 LOG_DIR="${LOG_DIR:-/tmp/entertainer-build}"
 ENRICH_PID="${ENRICH_PID:-}"
