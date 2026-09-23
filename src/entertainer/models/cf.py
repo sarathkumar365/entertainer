@@ -27,6 +27,7 @@ import scipy.sparse as sp
 from rich.console import Console
 
 from ..config import CF_FACTORS, PATHS
+from ..errors import MissingSourceData
 
 console = Console()
 
@@ -78,7 +79,7 @@ def load_ratings() -> pl.DataFrame:
     ):
         return pl.read_parquet(cache).select("userId", "movieId", "rating").cast(_RATINGS_SCHEMA)
     if not path.exists():
-        raise FileNotFoundError(f"missing {path}; run `entertainer fetch` first")
+        raise MissingSourceData(f"missing {path}; run `ent data fetch` first")
     df = pl.read_csv(path, schema_overrides=_RATINGS_SCHEMA).select("userId", "movieId", "rating")
     # Write-then-rename, stamp last: a crash mid-write must never leave a
     # truncated cache that a matching stamp would vouch for.

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import IMDB_FILES, PATHS, has_tmdb
+from .errors import EntertainerError, MissingCredentials
 
 MIN_FREE_BYTES = 10 * 1024**3
 
@@ -31,12 +32,12 @@ def preflight(require_tmdb: bool = True) -> dict[str, int | bool | str]:
     PATHS.ensure()
     free = shutil.disk_usage(PATHS.root).free
     if free < MIN_FREE_BYTES:
-        raise RuntimeError(
+        raise EntertainerError(
             f"{free / 1024**3:.1f} GiB free at {PATHS.root}; the local build needs "
             "at least 10 GiB. Raw IMDb downloads can be deleted after a successful build."
         )
     if require_tmdb and not has_tmdb():
-        raise RuntimeError(
+        raise MissingCredentials(
             "no usable TMDB credential: set an ASCII TMDB_API_KEY or TMDB_BEARER in .env"
         )
     return {"data_dir": str(PATHS.root), "free_bytes": free, "tmdb": has_tmdb()}

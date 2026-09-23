@@ -23,6 +23,7 @@ import numpy as np
 from rich.console import Console
 
 from ..config import ENCODER_DIM_TARGET, ENCODER_FALLBACK, ENCODER_MODEL, PATHS
+from ..errors import MissingDependency
 
 console = Console()
 
@@ -37,7 +38,9 @@ def _device() -> str:
     try:
         import torch
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("install the encode extra: uv pip install -e '.[encode]'") from exc
+        raise MissingDependency(
+            "install the encode extra: uv pip install -e '.[encode]'"
+        ) from exc
     override = os.environ.get("ENTERTAINER_DEVICE", "").strip().lower()
     if override:
         return override

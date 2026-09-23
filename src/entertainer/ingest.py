@@ -12,9 +12,10 @@ import numpy as np
 
 from . import store
 from .data import catalog, tmdb
+from .errors import EntertainerError
 
 
-class IngestError(RuntimeError):
+class IngestError(EntertainerError):
     """A title could not be pulled in. The message is safe to show a user."""
 
 

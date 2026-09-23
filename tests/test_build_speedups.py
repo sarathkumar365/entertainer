@@ -74,8 +74,11 @@ def test_load_ratings_refreshes_when_csv_is_restored_with_an_older_mtime(tmp_pat
 
 
 def test_load_ratings_missing_everything_raises(tmp_path, monkeypatch):
+    """A dump that was never fetched is a state of the build, not an IO fault."""
+    from entertainer.errors import MissingSourceData
+
     monkeypatch.setattr(cf, "_ratings_path", lambda: tmp_path / "ratings.csv")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(MissingSourceData):
         cf.load_ratings()
 
 
