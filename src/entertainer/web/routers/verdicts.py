@@ -31,8 +31,19 @@ def rate(body: Verdict, ctx: AppContext = Depends(get_context)) -> dict[str, Any
         return {"ok": True, "verdict": "unseen"}
     if body.verdict not in VERDICTS:
         raise HTTPException(400, f"unknown verdict {body.verdict!r}")
+    # A verdict given on a recommendation is the only thing that produces an
+    # off-policy datapoint, and the join that finds them is temporal today —
+    # a rating counts if it merely came after the impression. Stamping the
+    # slate makes it exact.
+    context = {}
+    if body.slate_id:
+        context["slate_id"] = body.slate_id
+        if body.position is not None:
+            context["position"] = body.position
     with store.session() as con:
-        ctx.engine.record(con, body.item_id, body.verdict, source="web")
+        ctx.engine.record(
+            con, body.item_id, body.verdict, source="web", context=context or None
+        )
     return {"ok": True, "verdict": body.verdict}
 
 

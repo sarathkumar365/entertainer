@@ -225,3 +225,23 @@ def taste_summary(model: TasteModel, axes: list[Axis]) -> list[str]:
             f"and away from [{against}]"
         )
     return lines
+
+
+def surface_preferences(model: TasteModel, fs) -> list[tuple[str, float]]:
+    """The five named side features, with their learned signed weights.
+
+    The 192 latent axes are only describable by their poles, but these five
+    have stable human names — consensus quality, how widely seen, release
+    recency, runtime, is a series — so they can be read directly.
+
+    Returns an empty list when the model's feature vector does not line up
+    with the names, which happens if a model is loaded against an item space
+    of a different shape. Silently mislabelling weights would be worse than
+    showing none.
+    """
+    from .features import SIDE_FEATURE_NAMES
+
+    side = taste_direction(model)[fs.n_latent :]
+    if side.size != len(SIDE_FEATURE_NAMES):
+        return []
+    return [(name, float(w)) for name, w in zip(SIDE_FEATURE_NAMES, side, strict=True)]

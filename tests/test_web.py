@@ -489,3 +489,102 @@ def test_posters_are_absolute_tmdb_urls(client):
     items = client.get("/api/feed?years=4&limit=5").json()["items"]
     assert items
     assert all(i["poster"].startswith("https://image.tmdb.org/t/p/") for i in items)
+
+
+def taught(client, n=4):
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:n]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+    return feed
+
+
+def test_taste_describes_axes_with_both_poles(client):
+    """An axis is only legible relative to what it points away from."""
+    taught(client)
+    body = client.get("/api/taste").json()
+    assert body["n_verdicts"] == 4, "must report real verdicts, not sampled negatives"
+    assert "rff" in body["capacity"]
+    for axis in body["axes"]:
+        assert "towards" in axis and "away" in axis
+        assert set(axis["towards"]) == {"terms", "examples"}
+    names = [f["name"] for f in body["side_features"]]
+    assert names == [
+        "consensus quality", "how widely seen", "release recency", "runtime", "is a series",
+    ]
+
+
+def test_taste_refuses_before_there_is_a_taste(client):
+    assert client.get("/api/taste").status_code == 409
+
+
+def test_audit_returns_the_raw_curve_as_well_as_the_readings(client):
+    """The interface plots the curve; it must not have to re-derive it."""
+    taught(client, 12)
+    body = client.get("/api/audit").json()
+    curve = body["curve"]
+    lengths = {len(curve[k]) for k in ("steps", "absolute_error", "baseline_error", "predicted", "actual", "inside_interval")}
+    assert len(lengths) == 1, "the parallel arrays must line up to be plottable"
+    assert body["n_verdicts"] == 12
+    assert any(r["measure"] == "verdicts used" and r["value"] == "12" for r in body["readings"])
+    assert body["off_policy"]["status"] == "not-enough-data"
+
+
+def test_audit_refuses_below_the_minimum(client):
+    taught(client, 3)
+    assert client.get("/api/audit").status_code == 409
+
+
+def test_similar_returns_neighbours_with_similarities(client):
+    item_id = client.get("/api/feed?years=4&limit=5").json()["items"][0]["item_id"]
+    body = client.get(f"/api/similar/{item_id}?k=3").json()
+    assert len(body["items"]) == 3
+    sims = [i["similarity"] for i in body["items"]]
+    assert sims == sorted(sims, reverse=True)
+    assert all(i["item_id"] != item_id for i in body["items"])
+
+
+def test_similar_404s_for_a_title_outside_the_item_space(client):
+    assert client.get("/api/similar/999999").status_code == 404
+
+
+def test_a_verdict_from_a_slate_records_which_slate(client):
+    """The off-policy join is temporal without this — a rating counts merely
+    because it came later than some impression."""
+    import json as _json
+
+    from entertainer import store
+
+    taught(client, 3)
+    slate = client.post("/api/recommendations/slate?k=3").json()
+    pick = slate["items"][0]
+    assert client.post(
+        "/api/rate",
+        json={"item_id": pick["item_id"], "verdict": "love",
+              "slate_id": slate["slate_id"], "position": 0},
+    ).json()["ok"]
+
+    with store.session(read_only=True) as con:
+        context = con.execute(
+            "SELECT context FROM events WHERE item_id = ? ORDER BY ts DESC LIMIT 1",
+            [pick["item_id"]],
+        ).fetchone()[0]
+    recorded = _json.loads(context)
+    assert recorded["slate_id"] == slate["slate_id"]
+    assert recorded["position"] == 0
+    assert recorded["verdict"] == "love"
+
+
+def test_an_ordinary_verdict_carries_no_slate(client):
+    import json as _json
+
+    from entertainer import store
+
+    item_id = client.get("/api/feed?years=4&limit=5").json()["items"][0]["item_id"]
+    client.post("/api/rate", json={"item_id": item_id, "verdict": "like"})
+    with store.session(read_only=True) as con:
+        context = _json.loads(
+            con.execute(
+                "SELECT context FROM events WHERE item_id = ? LIMIT 1", [item_id]
+            ).fetchone()[0]
+        )
+    assert "slate_id" not in context

@@ -940,9 +940,7 @@ def forget(title: str) -> None:
 @app.command()
 def taste(axes: int = typer.Option(6, help="How many latent axes to describe.")) -> None:
     """Show what the engine has worked out about your taste."""
-    from .models.discover import describe_axes
-    from .models.features import SIDE_FEATURE_NAMES
-    from .models.taste import taste_direction
+    from .models.discover import describe_axes, surface_preferences
 
     _require_catalog()
     engine = Engine()
@@ -972,11 +970,10 @@ def taste(axes: int = typer.Option(6, help="How many latent axes to describe."))
         console.print(f"  [red]away from[/red]  {', '.join(ax.other_pole[:5]) or '—'}")
         console.print(f"  [dim]e.g. {', '.join(ax.other_examples)}[/dim]")
 
-    direction = taste_direction(model)
-    side = direction[fs.n_latent :]
-    if side.size == len(SIDE_FEATURE_NAMES):
+    surface = surface_preferences(model, fs)
+    if surface:
         console.print("\n[bold]surface preferences[/bold] [dim](learned, not assumed)[/dim]")
-        for name, w in zip(SIDE_FEATURE_NAMES, side, strict=True):
+        for name, w in surface:
             lean = "prefers more" if w > 0 else "prefers less"
             bar = "█" * min(20, int(abs(w) * 60))
             console.print(f"  {name:>18}  [dim]{lean:>12}[/dim]  {bar} [dim]{w:+.3f}[/dim]")
