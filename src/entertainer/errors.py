@@ -31,3 +31,21 @@ class IntegrityRefusal(EntertainerError):
     Distinct from a bug: the code worked, and declined to produce a number
     that could not be trusted.
     """
+
+
+class ModelNotReady(EntertainerError):
+    """A build artefact this request needs is absent or out of date.
+
+    Distinct from a bug and from an empty catalogue: the pipeline simply has
+    not produced this piece yet. The right response is to finish the build,
+    so callers translate it into "come back later", not "something broke".
+    """
+
+
+class CatalogueBusy(EntertainerError):
+    """Another process holds the database lock, almost always a build.
+
+    DuckDB gives a writer exclusive access to the file. That is a normal
+    state of the system rather than a failure, and a reader that meets it
+    should say so rather than raise a driver-level IO error.
+    """

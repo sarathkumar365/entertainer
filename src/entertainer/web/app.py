@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import store
 from ..engine import Engine
 from .context import EMPTY_CATALOGUE, AppContext, _catalogue_size
+from .failures import install as install_failure_handlers
 from .present import POSTER_BASE
 from .routers import ALL as ROUTERS
 
@@ -50,6 +51,12 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     live settings. A module-level engine would be shared between them.
     """
     app = FastAPI(title="entertainer", docs_url=None, redoc_url=None)
+
+    # Registered first so it covers every route added below. A half-built
+    # machine is a normal state here — no fused space, or a build holding
+    # the database lock — and each of those has an answer the page can act
+    # on rather than a bare 500.
+    install_failure_handlers(app)
 
     # Apply idempotent schema additions before any read-only endpoint is hit.
     # Existing profiles therefore gain the evidence ledger without a manual

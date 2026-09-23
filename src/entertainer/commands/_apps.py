@@ -14,6 +14,11 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help="A personal, self-improving recommendation engine for film and television.",
+    # Typer's pretty traceback intercepts every exception and exits, which
+    # gives the reader a syntax-highlighted stack for "the model is not
+    # built yet" and denies `cli.main` the chance to say so in one line.
+    # Unexpected errors still print a plain traceback from the interpreter.
+    pretty_exceptions_enable=False,
 )
 
 data_app = typer.Typer(no_args_is_help=True, help="Build and maintain the catalogue.")

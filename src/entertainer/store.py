@@ -17,6 +17,7 @@ from typing import Any
 import duckdb
 
 from .config import PATHS
+from .errors import CatalogueBusy
 from .resources import duckdb_config
 
 SCHEMA = """
@@ -144,6 +145,30 @@ def titles_columns() -> list[str]:
         scratch.close()
 
 
+def _open(read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    """Open the database file, naming the common reason it will not open.
+
+    DuckDB gives a writer exclusive access to the file, so every other
+    process — the rating interface included — is locked out for as long as a
+    build runs. That is how the system is meant to work, and the driver's
+    "Conflicting lock is held" IO error reads like a corrupt file rather than
+    like a build in progress. Translate it once, here, so no caller has to
+    know what DuckDB's lock error looks like.
+    """
+    try:
+        return duckdb.connect(
+            str(PATHS.catalog_db), read_only=read_only, config=duckdb_config()
+        )
+    except duckdb.IOException as exc:
+        if "lock" not in str(exc).lower():
+            raise
+        raise CatalogueBusy(
+            "the database is in use by another process, usually a running "
+            "build; wait for it to finish, or stop it with "
+            "`./scripts/entertainer stop`"
+        ) from exc
+
+
 def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     PATHS.ensure()
 
@@ -153,13 +178,13 @@ def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     # interface in live mode, where there is no catalogue by design but the
     # verdict log still has to exist.
     if read_only and not PATHS.catalog_db.exists():
-        bootstrap = duckdb.connect(str(PATHS.catalog_db), config=duckdb_config())
+        bootstrap = _open()
         bootstrap.execute(SCHEMA)
         for statement in MIGRATIONS:
             bootstrap.execute(statement)
         bootstrap.close()
 
-    con = duckdb.connect(str(PATHS.catalog_db), read_only=read_only, config=duckdb_config())
+    con = _open(read_only=read_only)
     if not read_only:
         con.execute(SCHEMA)
         for statement in MIGRATIONS:

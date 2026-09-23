@@ -1,5 +1,6 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
+import Boundary from "./components/Boundary";
 import Evidence from "./pages/Evidence";
 import Home from "./pages/Home";
 import Library from "./pages/Library";
@@ -16,6 +17,7 @@ const TABS = [
 ];
 
 export default function App() {
+  const location = useLocation();
   return (
     <div className="app">
       <nav className="nav">
@@ -25,15 +27,19 @@ export default function App() {
         ))}
       </nav>
       <main>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/recs" element={<Recommendations />} />
-          <Route path="/rate" element={<Rate />} />
-          <Route path="/library" element={<Library />} />
-          <Route path="/taste" element={<Taste />} />
-          <Route path="/evidence" element={<Evidence />} />
-          <Route path="*" element={<Home />} />
-        </Routes>
+        {/* Outside the nav on purpose: a page that throws must leave the
+            tabs standing, or there is no way to reach one that works. */}
+        <Boundary resetKey={location.pathname}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/recs" element={<Recommendations />} />
+            <Route path="/rate" element={<Rate />} />
+            <Route path="/library" element={<Library />} />
+            <Route path="/taste" element={<Taste />} />
+            <Route path="/evidence" element={<Evidence />} />
+            <Route path="*" element={<Home />} />
+          </Routes>
+        </Boundary>
       </main>
     </div>
   );

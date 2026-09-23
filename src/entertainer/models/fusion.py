@@ -42,6 +42,7 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 
 from ..config import CF_RANK, FUSED_DIM, PATHS
+from ..errors import ModelNotReady
 
 console = Console()
 
@@ -79,7 +80,10 @@ class FusionArtifacts:
         the catalogue carries.
         """
         if self.pca_mean is None or self.ridge_coef is None:
-            raise RuntimeError("this fused space predates out-of-sample projection; rebuild it")
+            raise ModelNotReady(
+                "this fused space predates out-of-sample projection; "
+                "run `ent data fuse` to rebuild it"
+            )
 
         content = np.atleast_2d(np.asarray(content, dtype=np.float32))
         cf = content @ self.ridge_coef.T + self.ridge_intercept

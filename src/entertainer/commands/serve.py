@@ -6,6 +6,7 @@ import typer
 from rich.panel import Panel
 
 from ..config import has_tmdb
+from ..errors import EntertainerError
 from ..render import console
 from ..render import fail as _fail
 from ._apps import app
@@ -45,7 +46,13 @@ def rate(
     from ..web import serve
     from ..web.app import EMPTY_CATALOGUE, _catalogue_size, create_app
 
-    size = _catalogue_size()
+    # A running build owns the database, so this is the normal way to find
+    # out — and a lock error here must read as "a build is running", not as
+    # an unhandled traceback on startup.
+    try:
+        size = _catalogue_size()
+    except EntertainerError as exc:
+        _fail(str(exc))
     use_live = live if live is not None else size < EMPTY_CATALOGUE
     if use_live and not has_tmdb():
         _fail(
@@ -57,6 +64,12 @@ def rate(
         _fail("no catalogue — run `ent setup`, `ent bundle import <file>`, or use --live")
 
     binding = serve.resolve(host=host, port=port, lan=lan, token=token)
+    # Built before the panel is printed: a failure here must not follow a
+    # banner announcing a URL that will never answer.
+    try:
+        application = create_app(token=binding.token, live=use_live)
+    except EntertainerError as exc:
+        _fail(str(exc))
     off_loopback = binding.off_loopback
     url = binding.url()
     console.print(
@@ -87,8 +100,7 @@ def rate(
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(
-        create_app(token=binding.token, live=use_live),
-        host=binding.host, port=binding.port, log_level="warning",
+        application, host=binding.host, port=binding.port, log_level="warning",
     )
 
 
