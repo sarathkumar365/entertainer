@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from ... import store
+from ...models.taste import to_display_scale
 from ..context import AppContext, get_context
 from ..present import present
 
@@ -16,7 +17,8 @@ router = APIRouter()
 @router.post("/api/recommendations/slate")
 def recommendation_slate(k: int = 10, ctx: AppContext = Depends(get_context)) -> dict[str, Any]:
     """Create and log an observational production slate with propensities."""
-    from ...recommend import Filters, produce_slate
+    from ...engine import liked_titles
+    from ...recommend import Filters, attach_reasons, produce_slate
 
     with store.session() as con:
         # Recommendations are derived from the event log on every call;
@@ -36,9 +38,31 @@ def recommendation_slate(k: int = 10, ctx: AppContext = Depends(get_context)) ->
             filters=Filters(exclude=frozenset(store.interacted(con))),
         )
         recs = slate.picks
+        # "because you liked X" — the same explanation `ent recs` prints.
+        liked_ids, liked_labels = liked_titles(con, ctx.engine)
+        attach_reasons(recs, fs, liked_ids, liked_labels)
+        # Engine.meta is a lean column set — no poster, no overview — because
+        # it is loaded for the whole catalogue and the synopses alone would be
+        # tens of megabytes. Fetching full rows for the handful actually
+        # recommended is what makes them renderable.
+        rows = store.item_rows(con, slate.item_ids)
+
     return {
         "slate_id": slate.slate_id,
         "observational": True,
-        "items": [{**present(meta[r.item_id]), "score": r.mean * 10.0, "std": r.std * 10.0,
-                   "propensity": r.propensity, "explored": r.explored} for r in recs],
+        "items": [
+            {
+                **present(rows.get(r.item_id) or meta[r.item_id]),
+                # Clamped for the same reason `ent recs` clamps: an
+                # unbounded posterior predicts 10.5 for something squarely
+                # inside what you love, and a bar drawn past its own axis
+                # reads as a bug.
+                "score": to_display_scale(r.mean),
+                "std": min(float(r.std) * 10.0, 10.0),
+                "propensity": r.propensity,
+                "explored": r.explored,
+                "reasons": r.reasons,
+            }
+            for r in recs
+        ],
     }

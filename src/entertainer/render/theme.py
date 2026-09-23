@@ -22,16 +22,10 @@ def fail(message: str) -> None:
 
 
 def as_ten(value: float) -> float:
-    """Render a reward on a 0-10 scale a person can read.
+    """The 0-10 display scale. See models.taste.to_display_scale."""
+    from ..models.taste import to_display_scale
 
-    The posterior is an unbounded linear model, so it will happily predict
-    10.4 for something squarely in the middle of what you love. That is
-    correct arithmetic and nonsense as a displayed score, so it is clamped —
-    at the display layer only. Clamping the model itself would distort the
-    ranking and throw away the information that one title is further along
-    the preference direction than another.
-    """
-    return float(min(10.0, max(0.0, value * 10.0)))
+    return to_display_scale(value)
 
 
 def pm(std: float) -> float:

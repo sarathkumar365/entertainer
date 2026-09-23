@@ -588,3 +588,56 @@ def test_an_ordinary_verdict_carries_no_slate(client):
             ).fetchone()[0]
         )
     assert "slate_id" not in context
+
+
+def test_a_client_side_route_serves_the_page_so_a_reload_works(client):
+    """The interface is a single-page app. Opening /taste directly, or
+    reloading it, must return index.html rather than 404."""
+    response = client.get("/taste")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_an_unknown_api_path_is_still_a_404(client):
+    """The catch-all must not swallow API paths: a mistyped endpoint that
+    resolves with HTML fails somewhere far from the cause."""
+    assert client.get("/api/nope").status_code == 404
+    assert client.get("/static/nope.js").status_code == 404
+
+
+def test_the_token_gate_still_covers_static_assets(client):
+    """Mount order changed; middleware coverage must not have."""
+    from fastapi.testclient import TestClient
+
+    from entertainer.web import app as webapp
+
+    guarded = TestClient(webapp.create_app(token="s3cret", live=False))
+    assert guarded.get("/static/assets/index.js").status_code == 401
+    assert guarded.get("/").status_code == 401
+
+
+def test_slate_scores_are_clamped_to_the_scale_they_are_drawn_on(client):
+    """The posterior is unbounded and will predict 10.5 for something
+    squarely inside what you love. The terminal clamped it and the API did
+    not, so the same slate read 10.0 in one and 10.5 in the other."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:6]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "love"})
+
+    items = client.post("/api/recommendations/slate?k=6").json()["items"]
+    assert items
+    assert all(0.0 <= i["score"] <= 10.0 for i in items)
+    assert all(0.0 <= i["std"] <= 10.0 for i in items)
+
+
+def test_slate_items_carry_what_it_takes_to_render_them(client):
+    """Engine.meta is a lean column set with no poster and no overview. The
+    slate served straight from it, so every recommendation came back blank."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:4]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+
+    items = client.post("/api/recommendations/slate?k=4").json()["items"]
+    assert items
+    assert all(i["poster"] for i in items), "a recommendation with no poster is a blank card"
+    assert all("reasons" in i for i in items)

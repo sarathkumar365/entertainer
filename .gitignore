@@ -39,3 +39,6 @@ venv/
 
 # encoding shards
 *_shards/
+
+# frontend
+node_modules/

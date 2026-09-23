@@ -208,6 +208,9 @@ def readings(
                 "good" if improving else "",
             )
         )
+        # The unit is carried in the value string above because the terminal
+        # table has no room for a second line. A caller with more space can
+        # split on the space; see web/routers/insight.
 
     calibrated = abs(coverage - interval) < CALIBRATION_BAND
     out.append(

@@ -87,9 +87,12 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 )
             return response
 
+    # Mounted before the routers, because the last of them ends in a
+    # catch-all that hands unclaimed paths to the browser's router — and a
+    # route registered earlier wins. The token middleware still covers this:
+    # middleware wraps the whole application, not individual routes.
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
     for module in ROUTERS:
         app.include_router(module.router)
-
-    # Mounted last, so the token middleware above covers /static too.
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

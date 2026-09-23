@@ -146,6 +146,24 @@ class FeatureMap:
         }
 
 
+def to_display_scale(reward: float) -> float:
+    """Put a reward on the 0-10 scale a person reads.
+
+    The posterior is an unbounded linear model, so it will happily predict
+    10.4 for something squarely in the middle of what you love. That is
+    correct arithmetic and nonsense as a displayed score, so it is clamped —
+    at the display layer only. Clamping the model itself would distort the
+    ranking and throw away the information that one title sits further along
+    the preference direction than another.
+
+    Defined here rather than in a renderer because both the terminal and the
+    API are display layers and had their own copies; one of them clamped and
+    one did not, so the same slate read 10.0 in the terminal and 10.5 over
+    HTTP.
+    """
+    return float(min(10.0, max(0.0, reward * 10.0)))
+
+
 @dataclass
 class TasteModel:
     """Posterior over one person's preference function."""
