@@ -1,0 +1,10 @@
+╭────────────────────────────────────────────────────────────────────────╮
+│ Tumbbad [2018, hi]                                                     │
+│                                                                        │
+│ predicted  2.9/10  ± 2.5                                               │
+│ the ± is the model's own uncertainty; a wide band means it is guessing │
+╰────────────────────────────────────────────────────────────────────────╯
+closest to titles you rated well:
+  +0.94  Parasite (2019)
+  +0.93  Whiplash (2014)
+  +0.93  Kantara (2022)

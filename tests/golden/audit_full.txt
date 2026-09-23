@@ -1,0 +1,15 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
+┃ measure                     ┃ value                 ┃ reading         ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
+│ verdicts used               │ 10                    │                 │
+│ mean absolute error         │ 3.51 / 10             │ lower is better │
+│ vs running-average baseline │ 3.73 / 10             │ model wins      │
+│ error: first vs last        │ 7.01 → 0.32           │ improving       │
+│ learning slope              │ +nan per 100 verdicts │ p=nan           │
+│ 90% interval coverage       │ 0.60                  │ miscalibrated   │
+│ rank correlation            │ —                     │ need more data  │
+└─────────────────────────────┴───────────────────────┴─────────────────┘
+every prediction above was made by a model that had not seen that verdict
+
+off-policy check: 0 logged recommendations with an outcome; needs 30 before the estimate means 
+anything
