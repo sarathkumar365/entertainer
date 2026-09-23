@@ -344,7 +344,6 @@ def data_cf(
     ),
 ) -> None:
     """Factorise the MovieLens co-consumption matrix."""
-    import numpy as np
 
     from .evaluation import integrity
     from .models import cf
@@ -538,8 +537,9 @@ def add(
     they loved. The title is fetched, encoded, projected into the existing
     fused space by the stored imputation map, and appended — no rebuild.
     """
-    from .data import catalog, tmdb
-    from .models import encoder, fusion
+    from .data import tmdb
+    from .ingest import IngestError, add_title
+    from .models import fusion
     from .models.itemcard import build_card
 
     _require_catalog()
@@ -547,6 +547,7 @@ def add(
         _fail("no TMDB credentials — put TMDB_BEARER or TMDB_API_KEY in .env")
     if not fusion.exists():
         _fail("no fused item space — run `ent setup` first")
+    engine = Engine()
 
     with store.session(read_only=True) as con:
         existing, _ = resolve_one(con, title, kind=kind)
@@ -575,29 +576,18 @@ def add(
         return
     chosen = hits[choice - 1]
 
-    payload = tmdb.detail(int(chosen["id"]), chosen["_kind"])
-    if not payload:
-        _fail("could not fetch details from TMDB")
-    row = tmdb.detail_to_row(payload, chosen["_kind"])
+    # Placement — inserting the row, encoding it, and appending to both the
+    # encoder matrix and the fused space in the same order — is owned by
+    # ingest.add_title, which `ent netflix` and the web app already use. This
+    # command used to carry its own copy of that sequence, and the copy had
+    # no guard against a title already in the space: adding an existing title
+    # appended a second, misaligned row.
+    try:
+        item_id, row = add_title(engine, int(chosen["id"]), chosen["_kind"], place=True)
+    except IngestError as exc:
+        _fail(str(exc))
 
-    art = fusion.load()
-    if art.pca_mean is None:
-        _fail("this fused space predates out-of-sample projection — run `ent data fuse` again")
-
-    card = build_card(row)
-    console.print(Panel.fit(card, title="item card", border_style="dim"))
-    content = encoder.encode_texts([card], show_progress=False)
-    latent = art.project(content)
-
-    with store.session() as con:
-        item_id = catalog.insert_title(con, row)
-
-    ids, mat = encoder.load()
-    encoder.save(np.append(ids, np.int32(item_id)), np.vstack([mat, content]))
-    art.item_ids = np.append(art.item_ids, np.int32(item_id))
-    art.space = np.vstack([art.space, latent])
-    fusion.save(art)
-
+    console.print(Panel.fit(build_card(row), title="item card", border_style="dim"))
     console.print(f"[green]added[/green] {row['title']} ({row.get('year')}) as item {item_id}")
     console.print("[dim]rate it with[/dim] [cyan]ent loved \"" + str(row["title"]) + "\"[/cyan]")
 
@@ -630,7 +620,6 @@ def onboard(
     languages: str = typer.Option("", help="Comma-separated language codes to focus on."),
 ) -> None:
     """Cold start: answer a short, adaptively chosen set of questions."""
-    import numpy as np
 
     from .coldstart import elicit
     from .models.taste import fit as fit_taste
