@@ -8,6 +8,6 @@ nothing outside may.
 from __future__ import annotations
 
 from . import tables
-from .theme import as_ten, console, fail, pm
+from .theme import as_ten, console, fail, pm, toned
 
-__all__ = ["as_ten", "console", "fail", "pm", "tables"]
+__all__ = ["as_ten", "console", "fail", "pm", "tables", "toned"]

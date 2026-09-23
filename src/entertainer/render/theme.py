@@ -41,3 +41,15 @@ def pm(std: float) -> float:
     almost nothing produces a band wider than the scale it is drawn on.
     """
     return float(min(std * 10, 10.0))
+
+
+#: Tone words from the library layer, mapped to rich styles. Library code
+#: returns a word rather than markup so the same reading can be printed here,
+#: serialised as JSON, or rendered in a browser.
+TONE = {"good": "green", "bad": "red", "warn": "yellow", "dim": "dim"}
+
+
+def toned(text: str, tone: str) -> str:
+    """Wrap ``text`` in the style for ``tone``, or leave it plain."""
+    style = TONE.get(tone)
+    return f"[{style}]{text}[/{style}]" if style else text
