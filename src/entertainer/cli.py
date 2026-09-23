@@ -17,10 +17,11 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from . import store
+from . import profile_io, store
 from .build_events import Reporter
 from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
+from .errors import EntertainerError
 from .manifests import write as write_manifest
 from .pipeline import preflight as pipeline_preflight
 from .render import as_ten as _as_ten
@@ -531,19 +532,18 @@ def bulk(
     engine = Engine()
     unresolved: list[str] = []
     resolved = 0
+    entries = profile_io.parse_bulk_lines(
+        path.read_text(encoding="utf-8"), default_verdict=default_verdict
+    )
     with store.session() as con:
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            verdict = default_verdict
-            if "|" in line:
-                line, verdict = (p.strip() for p in line.rsplit("|", 1))
-            match, alts = resolve_one(con, line)
+        for entry in entries:
+            match, alts = resolve_one(con, entry.title)
             if not match:
-                unresolved.append(f"{line}" + (f"  (closest: {alts[0].label()})" if alts else ""))
+                unresolved.append(
+                    f"{entry.title}" + (f"  (closest: {alts[0].label()})" if alts else "")
+                )
                 continue
-            engine.record(con, match.item_id, verdict, source="import")
+            engine.record(con, match.item_id, entry.verdict, source="import")
             resolved += 1
     console.print(f"[green]recorded {resolved} verdicts[/green]")
     if unresolved:
@@ -1326,25 +1326,8 @@ def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
     """
     _require_catalog()
     with store.session(read_only=True) as con:
-        rows = con.execute(
-            """
-            SELECT t.imdb_id, t.title, t.year, e.kind, e.value, e.source, e.ts, e.context
-            FROM events e JOIN titles t USING (item_id) ORDER BY e.ts
-            """
-        ).fetchall()
-    with open(path, "w", encoding="utf-8") as fh:
-        for imdb_id, title, year, kind, value, source, ts, context in rows:
-            fh.write(
-                json.dumps(
-                    {
-                        "imdb_id": imdb_id, "title": title, "year": year, "kind": kind,
-                        "value": value, "source": source, "ts": str(ts),
-                        "context": json.loads(context or "{}"),
-                    }
-                )
-                + "\n"
-            )
-    console.print(f"[green]{len(rows):,} events -> {path}[/green]")
+        n = profile_io.export_events(con, path)
+    console.print(f"[green]{n:,} events -> {path}[/green]")
     console.print("[dim]this file is your viewing history; keep it out of public repos[/dim]")
 
 
@@ -1352,34 +1335,16 @@ def export_profile(path: Path = typer.Option(Path("profile.jsonl"))) -> None:
 def import_profile(path: Path = typer.Argument(...)) -> None:
     """Re-import an exported profile, matching on IMDb id."""
     _require_catalog()
-    imported, missing, duplicates = 0, 0, 0
     with store.session() as con:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            rec = json.loads(line)
-            row = con.execute(
-                "SELECT item_id FROM titles WHERE imdb_id = ?", [rec["imdb_id"]]
-            ).fetchone()
-            if not row:
-                missing += 1
-                continue
-            try:
-                added = store.import_event(
-                    con, int(row[0]), rec["kind"], rec.get("value"),
-                    rec.get("source", "import"), rec["ts"], rec.get("context"),
-                )
-            except (KeyError, ValueError) as exc:
-                _fail(f"invalid profile record: {exc}")
-            if added:
-                imported += 1
-            else:
-                duplicates += 1
-    message = f"[green]imported {imported:,}[/green]"
-    if duplicates:
-        message += f", [dim]{duplicates} already present[/dim]"
-    if missing:
-        message += f", [yellow]{missing} not in catalogue[/yellow]"
+        try:
+            counts = profile_io.import_events(con, path)
+        except EntertainerError as exc:
+            _fail(str(exc))
+    message = f"[green]imported {counts.imported:,}[/green]"
+    if counts.duplicates:
+        message += f", [dim]{counts.duplicates} already present[/dim]"
+    if counts.missing:
+        message += f", [yellow]{counts.missing} not in catalogue[/yellow]"
     console.print(message)
 
 
