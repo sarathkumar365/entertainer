@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
@@ -24,20 +23,11 @@ from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
 from .manifests import write as write_manifest
 from .pipeline import preflight as pipeline_preflight
+from .render import as_ten as _as_ten
+from .render import console
+from .render import fail as _fail
+from .render import pm as _pm
 from .resolve import Match, resolve_one, search
-
-
-def _as_ten(value: float) -> float:
-    """Render a reward on a 0-10 scale a person can read.
-
-    The posterior is an unbounded linear model, so it will happily predict
-    10.4 for something squarely in the middle of what you love. That is
-    correct arithmetic and nonsense as a displayed score, so it is clamped —
-    at the display layer only. Clamping the model itself would distort the
-    ranking and throw away the information that one title is further along
-    the preference direction than another.
-    """
-    return float(min(10.0, max(0.0, value * 10.0)))
 
 app = typer.Typer(
     add_completion=False,
@@ -47,15 +37,7 @@ app = typer.Typer(
 data_app = typer.Typer(no_args_is_help=True, help="Build and maintain the catalogue.")
 app.add_typer(data_app, name="data")
 
-console = Console()
-
-
 # --- helpers ----------------------------------------------------------------
-
-
-def _fail(message: str) -> None:
-    console.print(f"[red]{message}[/red]")
-    raise typer.Exit(code=1)
 
 
 def _require_catalog() -> None:
@@ -884,7 +866,7 @@ def recs(
             because = "; ".join(f"{name}" for name, _ in p.reasons)
             console.print(f"    [dim]close to your: {because}[/dim]")
         console.print(
-            f"    [dim]predicted {_as_ten(p.mean):.1f}/10 ± {min(p.std * 10, 10.0):.1f}[/dim]\n"
+            f"    [dim]predicted {_as_ten(p.mean):.1f}/10 ± {_pm(p.std):.1f}[/dim]\n"
         )
 
     console.print(
@@ -924,7 +906,7 @@ def why(title: str) -> None:
     console.print(
         Panel.fit(
             f"[bold]{match.label()}[/bold]\n\n"
-            f"predicted  [bold]{_as_ten(mean[0]):.1f}/10[/bold]  ± {min(std[0] * 10, 10.0):.1f}\n"
+            f"predicted  [bold]{_as_ten(mean[0]):.1f}/10[/bold]  ± {_pm(std[0]):.1f}\n"
             f"the ± is the model's own uncertainty; a wide band means it is guessing",
             border_style="cyan",
         )
