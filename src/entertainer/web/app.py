@@ -163,7 +163,7 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 """
                 SELECT language, count(*) n FROM titles
                 WHERE poster_path IS NOT NULL AND year >= ?
-                GROUP BY 1 HAVING n >= 20 ORDER BY n DESC
+                GROUP BY 1 HAVING n >= 20 ORDER BY n DESC, language ASC
                 """,
                 [dt.date.today().year - 6],
             ).fetchall()
@@ -298,7 +298,7 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
                 """
                 SELECT t.language, count(DISTINCT e.item_id) n
                 FROM events e JOIN titles t USING (item_id)
-                WHERE e.kind = 'rate' GROUP BY 1 ORDER BY n DESC LIMIT 12
+                WHERE e.kind = 'rate' GROUP BY 1 ORDER BY n DESC, t.language ASC LIMIT 12
                 """
             ).fetchall()
             recent = con.execute(

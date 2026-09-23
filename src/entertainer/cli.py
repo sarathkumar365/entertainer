@@ -1229,7 +1229,9 @@ def stats() -> None:
     with store.session(read_only=True) as con:
         c = store.counts(con)
         langs = con.execute(
-            "SELECT language, count(*) n FROM titles GROUP BY 1 ORDER BY n DESC LIMIT 12"
+            # Tiebreak on language, so equal counts do not reorder between runs.
+            "SELECT language, count(*) n FROM titles GROUP BY 1 "
+            "ORDER BY n DESC, language ASC LIMIT 12"
         ).fetchall()
         cover = engine.coverage(con)
 

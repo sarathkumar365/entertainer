@@ -396,7 +396,12 @@ def apply_enrichment(con, results: Sequence) -> None:
 def language_histogram(top: int = 25) -> list[tuple[str, int]]:
     con = connect(read_only=True)
     rows = con.execute(
-        "SELECT language, count(*) c FROM titles GROUP BY 1 ORDER BY c DESC LIMIT ?", [top]
+        # The language tiebreaker is load-bearing, not cosmetic: without it two
+        # languages on the same count come back in whatever order the group-by
+        # produced, so the same catalogue prints a different table run to run.
+        "SELECT language, count(*) c FROM titles GROUP BY 1 "
+        "ORDER BY c DESC, language ASC LIMIT ?",
+        [top],
     ).fetchall()
     con.close()
     return rows
