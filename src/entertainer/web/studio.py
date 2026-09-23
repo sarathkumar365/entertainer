@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from ..build_events import list_builds, read_build
 
 STATIC = Path(__file__).parent / "static"
+SETUP_TTL_SECONDS = 60
 
 
 def create_studio_app() -> FastAPI:
@@ -20,6 +22,19 @@ def create_studio_app() -> FastAPI:
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC / "studio.html")
+
+    # The checks shell out to `gh`, `nvidia-smi` and `crontab`; a page that
+    # polls must not run them every second.
+    setup_cache: dict = {}
+
+    @app.get("/api/setup")
+    def setup(refresh: bool = False) -> dict:
+        from .. import setup_status
+
+        now = time.monotonic()
+        if refresh or not setup_cache or now - setup_cache["at"] > SETUP_TTL_SECONDS:
+            setup_cache.update(at=now, report=setup_status.collect())
+        return setup_cache["report"]
 
     @app.get("/api/builds")
     def builds() -> dict:

@@ -16,7 +16,7 @@ dependencies = [
     "scipy>=1.14",
     "scikit-learn>=1.6",
     "implicit>=0.7.2",
-    "httpx>=0.28",
+    "httpx[http2]>=0.28",
     "tenacity>=9.0",
     "tqdm>=4.67",
     "python-dotenv>=1.0",
@@ -34,6 +34,12 @@ web = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
 ]
+# CUDA ALS for `ent data cf` (Linux x86_64 + NVIDIA only). implicit's own
+# `gpu` extra pulls the RMM allocator; cf.py falls back to CPU when
+# implicit.gpu.HAS_CUDA is false, and ENTERTAINER_CF_GPU=0/1 overrides.
+gpu = [
+    "implicit[gpu]>=0.7.3",
+]
 dev = [
     "pytest>=8.3",
     "ruff>=0.8",
@@ -47,6 +53,18 @@ ent = "entertainer.cli:app"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Linux takes torch from PyTorch's own CUDA 12.8 index so the wheel's CUDA
+# build is chosen here rather than by whatever PyPI defaults to (cu128 also
+# covers Blackwell cards; needs driver >= 570). macOS has no CUDA build and
+# stays on PyPI, where torch ships with mps.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/entertainer"]

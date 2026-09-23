@@ -45,7 +45,20 @@ stop_service() {
     echo "$name is not running"
     return
   fi
-  kill "$(<"$file")"
+  local pid
+  pid="$(<"$file")"
+  kill "$pid"
+  # Wait for it to let go of the catalogue, so a pull that follows can open it.
+  for _ in {1..50}; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    # Keep the pid file: it is what stops `ent pull` opening the catalogue
+    # while this process still holds it.
+    echo "$name (pid $pid) is still shutting down; try again shortly" >&2
+    return 1
+  fi
   rm -f "$file"
   echo "stopped $name"
 }
@@ -68,6 +81,9 @@ Usage: ./scripts/entertainer <command>
   status      Show service state and model-artifact readiness.
   logs [name] Follow app, studio, or build logs (default: app).
   build       Start Studio if needed, then run the resumable full build.
+  pull [args] Replace the catalogue with the latest published build, keeping
+              your verdicts. Stops and restarts the app around it; extra
+              arguments go to `ent pull` (e.g. --yes, --tag build-...).
   ui          Rebuild the browser interface from src/entertainer/web/ui.
   debug       Show model readiness and the last 40 app log lines.
 
@@ -136,6 +152,18 @@ case "${1:-}" in
     echo "Build Studio: http://127.0.0.1:8757"
     echo "Running the resumable build. Press Ctrl-C to stop; run this command again to resume."
     "$ENT" setup 2>&1 | tee "$(log_file build)"
+    ;;
+  pull)
+    was_app=0; was_studio=0
+    running app && was_app=1
+    running studio && was_studio=1
+    [[ $was_app == 1 ]] && stop_service app
+    [[ $was_studio == 1 ]] && stop_service studio
+    status=0
+    "$ENT" pull "${@:2}" || status=$?
+    [[ $was_studio == 1 ]] && start_service studio "$ENT" studio --no-open
+    [[ $was_app == 1 ]] && start_service app "$ENT" rate --no-open
+    exit "$status"
     ;;
   debug)
     if ! stats_output="$("$ENT" stats 2>&1)"; then

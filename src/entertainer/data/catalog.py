@@ -14,6 +14,7 @@ import polars as pl
 from rich.console import Console
 
 from ..config import PATHS, VOTE_FLOOR_BY_LANGUAGE, VOTE_FLOOR_DEFAULT
+from ..pipeline import CATALOGUE_INPUTS_KEY, PUBLISHED_BUILD_KEY
 from ..store import connect, set_meta
 from . import imdb as imdb_mod
 
@@ -64,6 +65,35 @@ def quality_prior(rating: float | None, votes: int | None, prior_mean: float = 6
     return max(0.0, min(1.0, 0.85 * shrunk / 10.0 + 0.15 * confidence))
 
 
+def quality_prior_expr(rating: str, votes: str, prior_mean: float = 6.4,
+                       prior_weight: float = 2500.0) -> pl.Expr:
+    """``quality_prior`` as a polars expression, for whole-column use."""
+    r = pl.col(rating).cast(pl.Float64)
+    v = pl.col(votes).cast(pl.Float64)
+    shrunk = (r * v + prior_mean * prior_weight) / (v + prior_weight)
+    confidence = v.log1p() / math.log1p(1_000_000)
+    score = (0.85 * shrunk / 10.0 + 0.15 * confidence).clip(0.0, 1.0)
+    return (
+        pl.when(r.is_null() | v.is_null() | (v <= 0))
+        .then(pl.lit(prior_mean / 10.0))
+        .otherwise(score)
+    )
+
+
+def _forget_catalogue_inputs(con) -> None:
+    """Whatever this catalogue was built from, it is not that any more.
+
+    `setup` skips the rebuild when its recorded inputs match; a rebuild or a
+    prune run outside `setup` must not leave that record vouching for a
+    catalogue it no longer describes. `setup` re-records it when it finishes.
+    Nor is it a pulled release any more, so `ent pull` must not call it
+    up to date.
+    """
+    con.execute(
+        "DELETE FROM meta WHERE key IN (?, ?)", [CATALOGUE_INPUTS_KEY, PUBLISHED_BUILD_KEY]
+    )
+
+
 def build_base(min_votes: int = 50) -> int:
     """Stage 1: IMDb + MovieLens ids into `titles`. Returns row count."""
     df = imdb_mod.build(min_votes=min_votes)
@@ -77,9 +107,7 @@ def build_base(min_votes: int = 50) -> int:
     df = df.sort(["imdb_votes"], descending=True, nulls_last=True).with_row_index("item_id")
     df = df.with_columns(
         item_id=pl.col("item_id").cast(pl.Int32),
-        quality=pl.struct(["imdb_rating", "imdb_votes"]).map_elements(
-            lambda s: quality_prior(s["imdb_rating"], s["imdb_votes"]), return_dtype=pl.Float64
-        ),
+        quality=quality_prior_expr("imdb_rating", "imdb_votes"),
         tmdb_rating=pl.lit(None, dtype=pl.Float64),
         tmdb_votes=pl.lit(None, dtype=pl.Int32),
         popularity=pl.lit(None, dtype=pl.Float64),
@@ -91,6 +119,7 @@ def build_base(min_votes: int = 50) -> int:
     ).select(_COLUMNS)
 
     con = connect()
+    _forget_catalogue_inputs(con)
     con.register("_df", df.to_arrow())
 
     # Item ids are positional within a build, so a rebuild renumbers the whole
@@ -312,6 +341,8 @@ def prune_by_language(scale: float = 1.0, dry_run: bool = False) -> tuple[int, i
     is strict — an unidentifiable title with few votes is usually noise.
     """
     con = connect()
+    if not dry_run:
+        _forget_catalogue_inputs(con)
     floors = [(lang, int(round(floor * scale)))
               for lang, floor in VOTE_FLOOR_BY_LANGUAGE.items()]
     con.execute("CREATE OR REPLACE TEMP TABLE _floors (language VARCHAR, floor INTEGER)")
@@ -344,14 +375,56 @@ def prune_by_language(scale: float = 1.0, dry_run: bool = False) -> tuple[int, i
     return before, before - doomed
 
 
-def pending_enrichment(limit: int | None = None) -> list[str]:
+def enrichment_floor(scale: float = 1.0) -> int:
+    """The fewest IMDb votes any title can have and still survive the prune.
+
+    The lowest per-language floor, rounded the way ``prune_by_language``
+    rounds it. A title under this is deleted whatever language TMDB says it
+    is, so asking TMDB about it is a wasted request.
+    """
+    floors = [*VOTE_FLOOR_BY_LANGUAGE.values(), VOTE_FLOOR_DEFAULT]
+    return min(int(round(floor * scale)) for floor in floors)
+
+
+def pending_enrichment(
+    limit: int | None = None, floor_scale: float = 1.0
+) -> list[tuple[str, int | None]]:
+    """Unenriched titles as (imdb_id, tmdb_id) pairs, most-voted first.
+
+    The tmdb_id is only offered where it came from MovieLens, the one source
+    guaranteed to be a movie id; anything else resolves through ``/find``.
+    Titles below every language floor are left out and left unstamped, so a
+    later run at a lower ``floor_scale`` still picks them up. The prune's
+    exemptions apply here too: no vote count, or a verdict in the event log.
+    """
     con = connect(read_only=True)
-    sql = "SELECT imdb_id FROM titles WHERE enriched_at IS NULL ORDER BY imdb_votes DESC NULLS LAST"
+    sql = f"""
+        SELECT imdb_id, CASE WHEN movielens_id IS NOT NULL THEN tmdb_id END
+        FROM titles
+        WHERE enriched_at IS NULL
+          AND (imdb_votes IS NULL
+               OR imdb_votes >= {enrichment_floor(floor_scale)}
+               OR item_id IN (SELECT DISTINCT item_id FROM events))
+        ORDER BY imdb_votes DESC NULLS LAST
+    """
     if limit:
         sql += f" LIMIT {int(limit)}"
-    rows = [r[0] for r in con.execute(sql).fetchall()]
+    rows = [(r[0], None if r[1] is None else int(r[1])) for r in con.execute(sql).fetchall()]
     con.close()
     return rows
+
+
+def _update_from(con, frame: pl.DataFrame, sql: str) -> None:
+    """Run one ``UPDATE ... FROM _batch`` against ``frame``.
+
+    One set-based statement per batch rather than one per row: DuckDB is
+    columnar, and a row-at-a-time UPDATE rewrites far more than the row.
+    """
+    con.register("_batch", frame.to_arrow())
+    try:
+        con.execute(sql)
+    finally:
+        con.unregister("_batch")
 
 
 def apply_enrichment(con, results: Sequence) -> None:
@@ -361,35 +434,76 @@ def apply_enrichment(con, results: Sequence) -> None:
     (they are authoritative), but IMDb's rating and vote count stay, because
     IMDb's ratings pool is far larger and better calibrated.
     """
-    payload = [
-        (
-            r.tmdb_id, r.overview, r.tagline, r.original_language, r.popularity,
-            r.tmdb_rating, r.tmdb_votes, r.poster_path,
-            r.keywords or [], r.keywords or [],
-            r.genres or [], r.imdb_id,
-        )
-        for r in results
-    ]
-    con.executemany(
+    if not results:
+        return
+    frame = pl.DataFrame(
+        {
+            "imdb_id": [r.imdb_id for r in results],
+            "tmdb_id": [r.tmdb_id for r in results],
+            "overview": [r.overview for r in results],
+            "tagline": [r.tagline for r in results],
+            "language": [r.original_language for r in results],
+            "popularity": [r.popularity for r in results],
+            "tmdb_rating": [r.tmdb_rating for r in results],
+            "tmdb_votes": [r.tmdb_votes for r in results],
+            "poster_path": [r.poster_path for r in results],
+            "keywords": [list(r.keywords or []) for r in results],
+            "genres": [list(r.genres or []) for r in results],
+            "keywords_fetched": [bool(getattr(r, "keywords_fetched", False)) for r in results],
+        },
+        schema={
+            "imdb_id": pl.Utf8, "tmdb_id": pl.Int64, "overview": pl.Utf8, "tagline": pl.Utf8,
+            "language": pl.Utf8, "popularity": pl.Float64, "tmdb_rating": pl.Float64,
+            "tmdb_votes": pl.Int64, "poster_path": pl.Utf8, "keywords": pl.List(pl.Utf8),
+            "genres": pl.List(pl.Utf8), "keywords_fetched": pl.Boolean,
+        },
+    ).unique("imdb_id", keep="last", maintain_order=True)
+    _update_from(
+        con,
+        frame,
         """
         UPDATE titles SET
-            tmdb_id     = coalesce(?, tmdb_id),
-            overview    = coalesce(?, overview),
-            tagline     = coalesce(?, tagline),
-            language    = coalesce(?, language),
-            popularity  = coalesce(?, popularity),
-            tmdb_rating = coalesce(?, tmdb_rating),
-            tmdb_votes  = coalesce(?, tmdb_votes),
-            poster_path = coalesce(?, poster_path),
+            tmdb_id     = coalesce(b.tmdb_id, titles.tmdb_id),
+            overview    = coalesce(b.overview, titles.overview),
+            tagline     = coalesce(b.tagline, titles.tagline),
+            language    = coalesce(b.language, titles.language),
+            popularity  = coalesce(b.popularity, titles.popularity),
+            tmdb_rating = coalesce(b.tmdb_rating, titles.tmdb_rating),
+            tmdb_votes  = coalesce(b.tmdb_votes, titles.tmdb_votes),
+            poster_path = coalesce(b.poster_path, titles.poster_path),
             -- Never overwrite fetched keywords with an empty list: the
             -- enrichment pass runs with keywords disabled, and clobbering
             -- them here would silently undo the keyword backfill.
-            keywords    = CASE WHEN len(?) > 0 THEN ? ELSE keywords END,
-            genres      = list_distinct(list_concat(coalesce(genres, []), ?)),
+            keywords    = CASE WHEN len(b.keywords) > 0 THEN b.keywords ELSE titles.keywords END,
+            keywords_at = CASE WHEN b.keywords_fetched THEN now() ELSE titles.keywords_at END,
+            genres      = list_distinct(list_concat(coalesce(titles.genres, []), b.genres)),
             enriched_at = now()
-        WHERE imdb_id = ?
+        FROM _batch b
+        WHERE titles.imdb_id = b.imdb_id
         """,
-        payload,
+    )
+
+
+def apply_keywords(con, batch: Sequence[tuple[int, list[str]]]) -> None:
+    """Write a batch of (item_id, keywords) from the keyword backfill.
+
+    keywords_at is stamped even when the list comes back empty: "TMDB has
+    none for this title" is a result, not a failure to fetch.
+    """
+    if not batch:
+        return
+    frame = pl.DataFrame(
+        {
+            "item_id": [int(item_id) for item_id, _ in batch],
+            "keywords": [list(kws or []) for _, kws in batch],
+        },
+        schema={"item_id": pl.Int32, "keywords": pl.List(pl.Utf8)},
+    ).unique("item_id", keep="last", maintain_order=True)
+    _update_from(
+        con,
+        frame,
+        "UPDATE titles SET keywords = b.keywords, keywords_at = now() "
+        "FROM _batch b WHERE titles.item_id = b.item_id",
     )
 
 

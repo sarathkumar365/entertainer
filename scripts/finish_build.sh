@@ -27,9 +27,9 @@ $ENT data keywords --top 150000 2>&1 | tee "$LOG_DIR/keywords.log" | tail -3
 step "waiting for title.principals, if still downloading"
 for _ in $(seq 1 120); do
   if [[ -f data/raw/imdb/title.principals.tsv.gz ]]; then
-    a=$(stat -c%s data/raw/imdb/title.principals.tsv.gz)
+    a=$(wc -c < data/raw/imdb/title.principals.tsv.gz | tr -d ' ')
     sleep 45
-    b=$(stat -c%s data/raw/imdb/title.principals.tsv.gz)
+    b=$(wc -c < data/raw/imdb/title.principals.tsv.gz | tr -d ' ')
     [[ "$a" == "$b" ]] && break
   else
     sleep 45

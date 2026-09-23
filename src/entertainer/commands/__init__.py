@@ -13,10 +13,11 @@ from . import (
     browse,  # noqa: F401
     build,  # noqa: F401
     diagnose,  # noqa: F401
+    release,  # noqa: F401
     serve,  # noqa: F401
     transfer,  # noqa: F401
     verdicts,  # noqa: F401
 )
-from ._apps import app, bundle_app, data_app
+from ._apps import app, bundle_app, data_app, release_app
 
-__all__ = ["app", "bundle_app", "data_app"]
+__all__ = ["app", "bundle_app", "data_app", "release_app"]

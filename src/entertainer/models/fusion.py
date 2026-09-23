@@ -48,6 +48,10 @@ console = Console()
 _RIDGE_ALPHAS = (1.0, 3.0, 10.0, 30.0, 100.0, 300.0)
 
 
+def fused_path():
+    return PATHS.embeddings / "fused.npz"
+
+
 @dataclass
 class FusionArtifacts:
     item_ids: np.ndarray        # (N,) catalogue item_id
@@ -89,23 +93,43 @@ class FusionArtifacts:
         return (out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-9)).astype(np.float32)
 
 
+def _cv_r2_by_alpha(
+    X: np.ndarray, Y: np.ndarray, alphas: tuple[float, ...], seed: int = 0
+) -> np.ndarray:
+    """Mean 5-fold R^2 for every alpha, one eigendecomposition per fold.
+
+    Equivalent to fitting ``Ridge(alpha)`` per (alpha, fold) pair, but the
+    fold's centred Gram matrix is decomposed once and every alpha is read off
+    the same spectrum. RidgeCV's closed-form LOO was the cheaper option; it
+    was passed over because ``cf_r2`` is not only a selection score but the
+    confidence every imputed title carries into the fused space, and LOO
+    would silently shift that value relative to earlier builds.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+    kf = KFold(n_splits=5, shuffle=True, random_state=seed)
+    scores = np.zeros((len(alphas), kf.get_n_splits()))
+    for f, (tr, te) in enumerate(kf.split(X)):
+        x_mean, y_mean = X[tr].mean(0), Y[tr].mean(0)
+        Xc = X[tr] - x_mean
+        evals, evecs = np.linalg.eigh(Xc.T @ Xc)
+        proj = evecs.T @ (Xc.T @ (Y[tr] - y_mean))
+        Xte = (X[te] - x_mean) @ evecs
+        ss_tot = float(((Y[te] - y_mean) ** 2).sum())
+        for k, alpha in enumerate(alphas):
+            pred = Xte @ (proj / (evals + alpha)[:, None]) + y_mean
+            ss_res = float(((Y[te] - pred) ** 2).sum())
+            scores[k, f] = 1.0 - ss_res / max(ss_tot, 1e-9)
+    return scores.mean(axis=1)
+
+
 def _fit_cf_map(
     content_overlap: np.ndarray, cf_overlap: np.ndarray, seed: int = 0
 ) -> tuple[Ridge, float]:
     """Fit content -> CF-factor regression, choosing alpha by 5-fold CV R^2."""
-    best_alpha, best_r2 = _RIDGE_ALPHAS[0], -np.inf
-    kf = KFold(n_splits=5, shuffle=True, random_state=seed)
-    for alpha in _RIDGE_ALPHAS:
-        scores = []
-        for tr, te in kf.split(content_overlap):
-            m = Ridge(alpha=alpha).fit(content_overlap[tr], cf_overlap[tr])
-            pred = m.predict(content_overlap[te])
-            ss_res = float(((cf_overlap[te] - pred) ** 2).sum())
-            ss_tot = float(((cf_overlap[te] - cf_overlap[tr].mean(0)) ** 2).sum())
-            scores.append(1.0 - ss_res / max(ss_tot, 1e-9))
-        mean_r2 = float(np.mean(scores))
-        if mean_r2 > best_r2:
-            best_alpha, best_r2 = alpha, mean_r2
+    r2 = _cv_r2_by_alpha(content_overlap, cf_overlap, _RIDGE_ALPHAS, seed=seed)
+    best = int(np.argmax(r2))
+    best_alpha, best_r2 = _RIDGE_ALPHAS[best], float(r2[best])
     model = Ridge(alpha=best_alpha).fit(content_overlap, cf_overlap)
     console.print(f"[dim]content->CF ridge: alpha={best_alpha}, cv R^2={best_r2:.3f}[/dim]")
     return model, best_r2
@@ -130,11 +154,10 @@ def build(
     cf_pos = {int(m): i for i, m in enumerate(cf_item_ids.tolist())}
 
     # Align CF rows to catalogue rows where possible.
-    cf_row = np.full(n, -1, dtype=np.int64)
-    for i, item_id in enumerate(content_ids.tolist()):
-        ml = movielens_of_item.get(int(item_id))
-        if ml is not None and int(ml) in cf_pos:
-            cf_row[i] = cf_pos[int(ml)]
+    cf_row = np.fromiter(
+        (cf_pos.get(movielens_of_item.get(int(i), -1), -1) for i in content_ids.tolist()),
+        dtype=np.int64, count=n,
+    )
     has_cf = cf_row >= 0
     coverage = float(has_cf.mean())
     console.print(f"[dim]genuine CF factors for {has_cf.sum():,}/{n:,} titles "
@@ -202,7 +225,7 @@ def build(
 def save(art: FusionArtifacts) -> None:
     PATHS.ensure()
     np.savez_compressed(
-        PATHS.embeddings / "fused.npz",
+        fused_path(),
         item_ids=art.item_ids,
         space=art.space,
         components=art.components,
@@ -218,7 +241,7 @@ def save(art: FusionArtifacts) -> None:
 
 
 def load() -> FusionArtifacts:
-    z = np.load(PATHS.embeddings / "fused.npz")
+    z = np.load(fused_path())
 
     def optional(key: str):
         return z[key] if key in z.files and z[key].size else None
@@ -237,4 +260,4 @@ def load() -> FusionArtifacts:
 
 
 def exists() -> bool:
-    return (PATHS.embeddings / "fused.npz").exists()
+    return fused_path().exists()

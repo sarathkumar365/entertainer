@@ -6,10 +6,12 @@ that a full build can fail in the first second rather than the third hour.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
-from .config import PATHS, has_tmdb
+from .config import IMDB_FILES, PATHS, has_tmdb
 
 MIN_FREE_BYTES = 10 * 1024**3
 
@@ -129,7 +131,8 @@ class BuildSettings:
     #: keywords, and the pass stops when they have them.
     keyword_target: int = 150_000
 
-    encode_batch: int = 64
+    #: None sizes the batch to the device (see encoder.auto_batch_size).
+    encode_batch: int | None = None
 
     #: Must match `fusion_dim`. The fused space is a rotation of the
     #: collaborative and content blocks, so asking for more fused dimensions
@@ -146,9 +149,95 @@ class BuildSettings:
     prior_max_users: int = 20_000
     prior_shrinkage: float = 0.15
 
+    #: Factorise MovieLens in a separate process while the catalogue, TMDB
+    #: and embedding stages run. It needs only ratings.csv, so it has no
+    #: reason to wait for them.
+    parallel: bool = True
+    #: Rerun the catalogue and factorisation even when their inputs are
+    #: unchanged since the last successful run.
+    force: bool = False
+
     def __post_init__(self) -> None:
         if self.fusion_dim > self.cf_factors:
             raise ValueError(
                 f"fusion_dim ({self.fusion_dim}) exceeds cf_factors ({self.cf_factors}); "
                 "the extra dimensions would be noise"
             )
+
+
+# --- input fingerprints ------------------------------------------------------
+#
+# A stage whose inputs have not changed since it last succeeded produces the
+# same output, so a rerun can skip it. The fingerprint is what the stage
+# reads plus the settings that shape it; bump the version constant whenever
+# the stage's own code changes what it would produce from the same inputs.
+
+CATALOGUE_VERSION = 1
+CF_VERSION = 1
+CATALOGUE_INPUTS_KEY = "catalogue_inputs"
+#: The published build this catalogue was pulled from, if it was pulled.
+PUBLISHED_BUILD_KEY = "catalogue_build"
+
+
+def _file_stamp(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    st = path.stat()
+    return f"{st.st_size}:{st.st_mtime_ns}"
+
+
+def _digest(parts: list[str]) -> str:
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def catalogue_inputs(settings: BuildSettings) -> str:
+    parts = [f"version={CATALOGUE_VERSION}"]
+    for name in IMDB_FILES:
+        path = PATHS.raw / "imdb" / name
+        # The server's ETag names the file's version exactly; a size and mtime
+        # is the fallback for a copy downloaded before validators were kept.
+        validator = path.with_name(path.name + ".validator")
+        version = validator.read_text().strip() if validator.exists() else ""
+        parts.append(f"{name}={version or _file_stamp(path)}")
+    parts.append(f"links={_file_stamp(PATHS.raw / 'ml-32m' / 'links.csv')}")
+    # The prune deletes rows in place, so a catalogue built at one floor
+    # cannot be reused at a lower one.
+    parts.append(f"min_votes={settings.min_votes}")
+    parts.append(f"floor_scale={settings.floor_scale}")
+    return _digest(parts)
+
+
+def cf_inputs(settings: BuildSettings) -> str:
+    return _digest([
+        f"version={CF_VERSION}",
+        f"ratings={_file_stamp(PATHS.raw / 'ml-32m' / 'ratings.csv')}",
+        f"factors={settings.cf_factors}",
+        f"iterations={settings.cf_iterations}",
+        f"holdout={settings.cf_holdout}",
+        f"signal={settings.cf_signal}",
+    ])
+
+
+def cf_inputs_path() -> Path:
+    return PATHS.embeddings / "cf_inputs.sha256"
+
+
+def cf_is_current(settings: BuildSettings) -> bool:
+    from .evaluation import integrity
+
+    stamp = cf_inputs_path()
+    return (
+        stamp.exists()
+        and stamp.read_text().strip() == cf_inputs(settings)
+        and (PATHS.embeddings / "cf_factors.npy").exists()
+        # The prior and the benchmark read the holdout the factorisation chose.
+        and (settings.cf_holdout <= 0 or integrity.holdout_path().exists())
+    )
+
+
+def record_cf_inputs(fingerprint: str) -> None:
+    PATHS.ensure()
+    stamp = cf_inputs_path()
+    tmp = stamp.with_name(f".{stamp.name}.tmp")
+    tmp.write_text(fingerprint)
+    tmp.replace(stamp)

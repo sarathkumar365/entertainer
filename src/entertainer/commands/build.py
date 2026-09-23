@@ -6,13 +6,19 @@ rather than restarted."""
 
 from __future__ import annotations
 
+import multiprocessing as mp
+import os
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+from threading import Thread
+
 import numpy as np
 import typer
 from rich.panel import Panel
 
-from .. import pipeline, store
+from .. import pipeline, resources, store
 from ..build_events import Reporter
-from ..config import has_tmdb
+from ..config import PATHS, has_tmdb
 from ..engine import Engine
 from ..manifests import write as write_manifest
 from ..pipeline import preflight as pipeline_preflight
@@ -28,15 +34,33 @@ def setup(
     enrich_limit: int = typer.Option(0, help="Enrich only the N most-voted titles (0 = all)."),
     min_votes: int = typer.Option(50, help="Flat IMDb vote floor at build time."),
     floor_scale: float = typer.Option(1.0, help="<1 widens the catalogue, >1 narrows it."),
+    parallel: bool = typer.Option(
+        True, help="Factorise MovieLens in the background while the other stages run."
+    ),
+    force: bool = typer.Option(
+        False, help="Rebuild the catalogue and factorisation even if their inputs are unchanged."
+    ),
+    memory_fraction: float | None = typer.Option(
+        None,
+        help="Share of RAM the build may plan to use (default 0.5, or "
+        "ENTERTAINER_MEMORY_FRACTION).",
+    ),
 ) -> None:
     """Run everything: download, build, enrich, prune, embed, factorise, fuse, prior."""
     from ..data import catalog, download
 
+    if memory_fraction is not None:
+        # Through the environment so the background process and every DuckDB
+        # connection, including ones opened deep inside a stage, see it.
+        os.environ[resources.MEMORY_FRACTION_ENV] = str(resources.memory_fraction(memory_fraction))
+    mem = resources.budget()
     settings = pipeline.BuildSettings(
         skip_enrich=skip_enrich,
         enrich_limit=enrich_limit,
         min_votes=min_votes,
         floor_scale=floor_scale,
+        parallel=parallel,
+        force=force,
     )
     info = pipeline_preflight(require_tmdb=not settings.skip_enrich)
     reporter = Reporter(settings={
@@ -44,46 +68,61 @@ def setup(
         "enrich_limit": settings.enrich_limit,
         "min_votes": settings.min_votes,
         "floor_scale": settings.floor_scale,
+        "parallel": settings.parallel,
+        "force": settings.force,
+        "memory_budget_bytes": mem.bytes,
         "free_bytes": info["free_bytes"],
     })
-    console.print(f"[dim]preflight passed: {info['free_bytes'] / 1024**3:.1f} GiB free[/dim]")
+    console.print(f"[dim]preflight passed: {info['free_bytes'] / 1024**3:.1f} GiB free; "
+                  f"planning within {mem.describe()}[/dim]")
     console.rule("[bold]1/8 downloading source data")
     with reporter.stage("sources"):
-        download.fetch_imdb()
-        download.fetch_movielens()
+        download.fetch_sources()
 
-    console.rule("[bold]2/8 building catalogue")
-    with reporter.stage("catalogue"):
-        n = catalog.build_base(min_votes=settings.min_votes)
-    console.print(f"[green]{n:,} titles[/green]")
+    cf_kwargs = {
+        "factors": settings.cf_factors,
+        "iterations": settings.cf_iterations,
+        "holdout": settings.cf_holdout,
+        "signal": settings.cf_signal,
+    }
+    cf_current = not settings.force and pipeline.cf_is_current(settings)
+    if cf_current:
+        reporter.skip("cf", "MovieLens and settings unchanged since the last factorisation")
+    jobs: list[_BackgroundStage] = []
 
-    if not settings.skip_enrich and has_tmdb():
-        console.rule("[bold]3/8 enriching from TMDB")
-        with reporter.stage("tmdb"):
-            data_enrich(
-                limit=settings.enrich_limit or None,
-                concurrency=settings.concurrency,
-                keywords=False,
+    def start_cf() -> None:
+        if cf_current or not settings.parallel:
+            return
+        device = _encoder_device()
+        if not resources.can_overlap_cf(device):
+            console.print(
+                f"[yellow]factorisation will run after encoding: alongside the {device} "
+                f"encoder it would not fit {mem.describe()}[/yellow]"
             )
-            data_keywords(top=settings.keyword_target, concurrency=settings.concurrency)
-    else:
-        console.rule("[bold]3/8 TMDB enrichment skipped")
-        reporter.skip("tmdb", "disabled by --skip-enrich or no TMDB credentials")
+            return
+        cf_log = PATHS.root / "runtime" / "logs" / "cf.log"
+        console.print(f"[dim]factorising MovieLens in the background — log: {cf_log}[/dim]")
+        jobs.append(_BackgroundStage(
+            reporter, "cf", _factorise, cf_kwargs, pipeline.cf_inputs(settings), str(cf_log)
+        ))
 
-    console.rule("[bold]4/8 pruning by language")
-    with reporter.stage("prune"):
-        data_prune(scale=settings.floor_scale, dry_run=False)
-    console.rule("[bold]5/8 encoding item text")
-    with reporter.stage("embeddings"):
-        data_embed(batch_size=settings.encode_batch, limit=None, fresh=False)
-    console.rule("[bold]6/8 factorising MovieLens")
-    with reporter.stage("cf"):
-        data_cf(
-            factors=settings.cf_factors,
-            iterations=settings.cf_iterations,
-            holdout=settings.cf_holdout,
-            signal=settings.cf_signal,
-        )
+    try:
+        _foreground_stages(settings, reporter, catalog, after_catalogue=start_cf)
+    except BaseException:
+        for job in jobs:
+            job.abandon()
+        raise
+
+    if cf_current:
+        console.rule("[bold]6/8 factorisation unchanged — reusing it")
+    elif jobs:
+        console.rule("[bold]6/8 waiting for the background factorisation")
+        jobs[0].wait()
+    else:
+        console.rule("[bold]6/8 factorising MovieLens")
+        with reporter.stage("cf"):
+            _factorise(cf_kwargs, pipeline.cf_inputs(settings))
+
     console.rule("[bold]7/8 fusing item space")
     with reporter.stage("fusion"):
         data_fuse(dim=settings.fusion_dim)
@@ -109,6 +148,119 @@ def setup(
     console.print(Panel.fit("[bold green]ready[/bold green]\nnext: [cyan]ent onboard[/cyan]"))
 
 
+def _foreground_stages(
+    settings: pipeline.BuildSettings, reporter: Reporter, catalog, after_catalogue
+) -> None:
+    """Stages 2-5: the chain that has to run in order, in this process.
+
+    ``after_catalogue`` runs once the catalogue exists. The factorisation
+    starts there rather than straight after the downloads, so it never
+    overlaps the Polars joins over IMDb, the largest allocation in the build.
+    """
+    fingerprint = pipeline.catalogue_inputs(settings)
+    with store.session() as con:
+        built_from = store.get_meta(con, pipeline.CATALOGUE_INPUTS_KEY)
+        has_titles = con.execute("SELECT count(*) FROM titles").fetchone()[0] > 0
+    if not settings.force and has_titles and built_from == fingerprint:
+        console.rule("[bold]2/8 catalogue unchanged — reusing it")
+        reporter.skip("catalogue", "IMDb, MovieLens links and settings unchanged since the last build")
+    else:
+        console.rule("[bold]2/8 building catalogue")
+        with reporter.stage("catalogue"):
+            n = catalog.build_base(min_votes=settings.min_votes)
+        console.print(f"[green]{n:,} titles[/green]")
+    after_catalogue()
+
+    if not settings.skip_enrich and has_tmdb():
+        console.rule("[bold]3/8 enriching from TMDB")
+        with reporter.stage("tmdb"):
+            data_enrich(
+                limit=settings.enrich_limit or None,
+                concurrency=settings.concurrency,
+                keywords=False,
+                floor_scale=settings.floor_scale,
+            )
+            data_keywords(top=settings.keyword_target, concurrency=settings.concurrency)
+    else:
+        console.rule("[bold]3/8 TMDB enrichment skipped")
+        reporter.skip("tmdb", "disabled by --skip-enrich or no TMDB credentials")
+
+    console.rule("[bold]4/8 pruning by language")
+    with reporter.stage("prune"):
+        data_prune(scale=settings.floor_scale, dry_run=False)
+    console.rule("[bold]5/8 encoding item text")
+    with reporter.stage("embeddings"):
+        data_embed(batch_size=settings.encode_batch, limit=None, fresh=False)
+    with store.session() as con:
+        store.set_meta(con, pipeline.CATALOGUE_INPUTS_KEY, fingerprint)
+
+
+def _encoder_device() -> str:
+    from ..models import encoder
+
+    try:
+        return encoder._device()
+    except RuntimeError:  # torch not installed; the encode stage will say so
+        return "cpu"
+
+
+def _factorise(kwargs: dict, fingerprint: str, log_path: str | None = None) -> None:
+    """Stage 6, runnable in a child process.
+
+    A child writing to the same terminal as the TMDB progress bar would make
+    both unreadable, so in the background its output goes to a log file.
+    """
+    if log_path is None:
+        data_cf(**kwargs)
+    else:
+        import sys
+
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "w", encoding="utf-8", buffering=1) as log:
+            sys.stdout = sys.stderr = log
+            data_cf(**kwargs)
+    pipeline.record_cf_inputs(fingerprint)
+
+
+class _BackgroundStage:
+    """One build stage running in a child process, reported like any other.
+
+    A separate process rather than a thread: the factorisation is CPU- and
+    BLAS-bound and would fight the GIL. ``spawn`` rather than ``fork``,
+    because this process already has threads (the reporter's heartbeat, the
+    progress display), and forking a threaded process can deadlock the child.
+    """
+
+    def __init__(self, reporter: Reporter, stage_id: str, fn, *args) -> None:
+        self._pool = ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("spawn"))
+        self._future = self._pool.submit(fn, *args)
+        self._error: BaseException | None = None
+        self._thread = Thread(
+            target=self._watch, args=(reporter, stage_id), name=f"entertainer-{stage_id}-watch",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _watch(self, reporter: Reporter, stage_id: str) -> None:
+        try:
+            with reporter.stage(stage_id):
+                self._future.result()
+        except BaseException as exc:  # re-raised on the main thread by wait()
+            self._error = exc
+
+    def wait(self) -> None:
+        self._thread.join()
+        self._pool.shutdown()
+        if self._error is not None:
+            raise RuntimeError(f"background stage failed: {self._error}") from self._error
+
+    def abandon(self) -> None:
+        self._future.cancel()
+        for proc in list(getattr(self._pool, "_processes", {}).values()):
+            proc.terminate()
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+
 @app.command("preflight")
 def preflight_command() -> None:
     """Check local storage and TMDB configuration before a full build."""
@@ -126,8 +278,7 @@ def data_fetch() -> None:
     """Download the IMDb and MovieLens bulk datasets."""
     from ..data import download
 
-    download.fetch_imdb()
-    download.fetch_movielens()
+    download.fetch_sources()
     console.print("[green]downloaded[/green]")
 
 
@@ -163,13 +314,16 @@ def data_enrich(
     limit: int | None = typer.Option(None, help="Only the N most-voted unenriched titles."),
     concurrency: int = typer.Option(40),
     keywords: bool = typer.Option(True, help="Fetch the keyword vocabulary (doubles requests)."),
+    floor_scale: float = typer.Option(
+        1.0, help="Skip titles the prune at this scale would delete whatever their language."
+    ),
 ) -> None:
     """Fill in synopses, keywords and languages from TMDB."""
     from ..data import catalog, tmdb
 
     if not has_tmdb():
         _fail("no TMDB credentials — put TMDB_BEARER or TMDB_API_KEY in .env")
-    pending = catalog.pending_enrichment(limit)
+    pending = catalog.pending_enrichment(limit, floor_scale=floor_scale)
     if not pending:
         console.print("[green]nothing left to enrich[/green]")
         return
@@ -213,12 +367,7 @@ def data_keywords(
     written = {"n": 0}
 
     def flush(batch):
-        # keywords_at is stamped even when the list comes back empty: "TMDB
-        # has none for this title" is a result, not a failure to fetch.
-        con.executemany(
-            "UPDATE titles SET keywords = ?, keywords_at = now() WHERE item_id = ?",
-            [(kws, item_id) for item_id, kws in batch],
-        )
+        catalog.apply_keywords(con, batch)
         written["n"] += len(batch)
 
     try:
@@ -230,15 +379,17 @@ def data_keywords(
 
 @data_app.command("embed")
 def data_embed(
-    batch_size: int = typer.Option(64),
+    batch_size: int | None = typer.Option(
+        None, help="Cards per forward pass. Default: sized to the device's free memory."
+    ),
     limit: int | None = typer.Option(None),
-    fresh: bool = typer.Option(False, help="Discard cached shards and re-encode everything."),
+    fresh: bool = typer.Option(False, help="Ignore cached vectors and re-encode everything."),
 ) -> None:
     """Encode every item card with the multilingual text encoder.
 
-    Resumable: completed shards are written as they finish, so an interrupted
-    run picks up where it stopped rather than repeating forty minutes of GPU
-    work.
+    Incremental and resumable: vectors are cached by card text, so a rebuild
+    encodes only new or changed cards, and an interrupted run keeps every
+    chunk it finished.
     """
     from ..models import encoder
     from ..models.itemcard import build_card
@@ -256,15 +407,16 @@ def data_embed(
     if not rows:
         _fail("catalogue is empty")
 
-    if fresh:
-        console.print(f"[dim]cleared {encoder.clear_shards()} cached shards[/dim]")
-
     ids = np.array([r["item_id"] for r in rows], dtype=np.int32)
     cards = [build_card(r) for r in rows]
     console.print(f"[dim]{len(cards):,} item cards[/dim]")
     console.print(Panel.fit(cards[0], title="example item card", border_style="dim"))
 
-    ids, mat = encoder.encode_resumable(ids, cards, batch_size=batch_size)
+    # A --limit run sees only part of the catalogue, so compacting would throw
+    # away every cached vector outside it.
+    ids, mat = encoder.encode_resumable(
+        ids, cards, batch_size=batch_size, fresh=fresh, compact=limit is None
+    )
     encoder.save(ids, mat)
     console.print(f"[green]embeddings: {mat.shape}[/green]")
 
@@ -285,12 +437,17 @@ def data_cf(
     from ..evaluation import integrity
     from ..models import cf
 
+    # Only `setup` knows the settings it would compare against, and it records
+    # them after this returns. A standalone run with other settings must not
+    # leave the old stamp vouching for factors it no longer describes.
+    pipeline.cf_inputs_path().unlink(missing_ok=True)
     ratings = cf.load_ratings()
     users = np.sort(ratings["userId"].unique().to_numpy())
     held = integrity.choose_holdout(users, holdout)
 
     ids, item_factors = cf.fit(
-        factors=factors, iterations=iterations, holdout_users=held, signal=signal
+        factors=factors, iterations=iterations, holdout_users=held, signal=signal,
+        ratings=ratings,
     )
     cf.save(ids, item_factors)
     if held is not None:

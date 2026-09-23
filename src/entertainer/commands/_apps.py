@@ -18,7 +18,11 @@ app = typer.Typer(
 
 data_app = typer.Typer(no_args_is_help=True, help="Build and maintain the catalogue.")
 bundle_app = typer.Typer(no_args_is_help=True, help="Move a built catalogue between machines.")
+release_app = typer.Typer(
+    no_args_is_help=True, help="Publish a built catalogue for your other machines to pull."
+)
 
 # Registration order decides the order `ent --help` lists the groups.
 app.add_typer(data_app, name="data")
 app.add_typer(bundle_app, name="bundle")
+app.add_typer(release_app, name="release")

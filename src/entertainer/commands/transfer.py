@@ -34,7 +34,7 @@ def bundle_export(
     Four hours of TMDB round trips become a file. Verdicts are deliberately
     not included — use `ent export` for those.
     """
-    from . import bundle
+    from .. import bundle
 
     require_catalog()
     info = bundle.export(path, include_space=space, include_encodings=encodings)
@@ -60,7 +60,7 @@ def bundle_export(
 @bundle_app.command("info")
 def bundle_info(path: Path = typer.Argument(...)) -> None:
     """Show what a bundle contains without unpacking it."""
-    from . import bundle
+    from .. import bundle
 
     data = bundle.inspect(path)
     table = Table("field", "value")
@@ -77,12 +77,14 @@ def bundle_import(
     ),
 ) -> None:
     """Unpack a bundle written by `ent bundle export`."""
-    from . import bundle
+    from .. import bundle
 
     try:
         manifest = bundle.restore(path, overwrite=overwrite)
     except RuntimeError as exc:
         _fail(str(exc))
+    for warning in manifest.get("warnings", []):
+        console.print(f"[yellow]{warning}[/yellow]")
     console.print(
         f"[green]{manifest['restored_titles']:,} titles restored[/green]"
         + (

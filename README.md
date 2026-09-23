@@ -264,7 +264,24 @@ cp .env.example .env     # then paste your free TMDB key
 ent setup                # download, build, enrich, embed, factorise, fuse
 ```
 
-`setup` is resumable — every stage skips work already done.
+`setup` is resumable — every stage skips work already done. The catalogue
+and the MovieLens factorisation are skipped outright when their inputs are
+unchanged since they last succeeded (`--force` rebuilds them anyway), TMDB
+only fetches titles it has never seen, and the encoder only encodes cards
+whose text changed. The factorisation runs in a background process
+alongside the TMDB and encoding stages; `--no-parallel` runs it in line.
+
+Memory is planned as a share of physical RAM — half by default, set with
+`--memory-fraction 0.3` or `ENTERTAINER_MEMORY_FRACTION`. DuckDB is capped
+at that share; the background factorisation only starts when it and the
+encoder fit inside it together, so an 8 GB laptop runs the stages one after
+another while a larger server overlaps them.
+
+On a Linux machine with an NVIDIA GPU, `uv pip install -e ".[encode,web,gpu]"`
+takes torch from PyTorch's CUDA 12.8 index (driver 570 or newer). The encoder
+then runs in bf16 with a batch size sized to free VRAM; `ENTERTAINER_DEVICE`
+overrides the device choice and `ENTERTAINER_CF_GPU=0` keeps the
+factorisation on the CPU.
 
 ---
 
@@ -281,6 +298,7 @@ From the project folder:
 ./scripts/entertainer stop     # stop the managed local services
 ./scripts/entertainer restart  # stop and start both, after a code change
 ./scripts/entertainer ui       # rebuild the browser interface after editing it
+./scripts/entertainer pull     # fetch the latest published build (see below)
 ```
 
 `start` is for using an already-built recommender. It puts the app on
@@ -384,6 +402,44 @@ Verdicts collected anywhere merge back by IMDb id:
 ent export --path verdicts.jsonl     # on the second machine
 ent import verdicts.jsonl            # on the main one
 ```
+
+### Using a prebuilt catalogue
+
+Build on the server, pull on your other machines. The machine with the GPU
+runs the full build and publishes it as a GitHub release; every other machine
+downloads that instead of building, so it needs no torch and no four hours.
+
+On the server:
+
+```bash
+ent setup && ent release publish
+# weekly, e.g. Sundays at 03:00:
+# 0 3 * * 0  cd ~/entertainer && .venv/bin/ent setup && .venv/bin/ent release publish
+```
+
+On any other machine:
+
+```bash
+git clone <repo> && cd entertainer
+uv venv && uv pip install -e ".[web]"
+cp .env.example .env                 # then paste your TMDB key
+gh auth login                        # the same GitHub account that publishes
+./scripts/entertainer pull           # stops the app, imports, restarts it
+./scripts/entertainer start
+```
+
+`pull` shows the build, its date and the title count against what is here,
+then asks before replacing anything. Your verdicts stay: they are moved onto
+the new catalogue by IMDb id, and if any of them names a title the new build
+lacks, nothing is changed. Every file is checked against the SHA-256 in the
+release's manifest before the catalogue is touched. `ent release list` shows
+what has been published; `ent pull --tag build-...` takes an older one.
+
+Releases go to `sarathkumar365/entertainer-builds`, or whatever
+`ENTERTAINER_RELEASES_REPO` names. That repository must stay private:
+the bundle is IMDb and TMDB derived data, their terms do not allow
+redistributing it, and `publish` refuses a repository GitHub does not
+report as private. Never point it at this (public) source repository.
 
 ## Use
 
