@@ -126,6 +126,11 @@ def run(
     return out
 
 
+# Below this many logged recommendations with an outcome, the importance
+# weights have ruinous variance and the estimate is not worth reporting.
+MIN_LOGGED = 30
+
+
 def snips(
     logged: list[tuple[float, float, float]],
     new_scores: list[float],
@@ -145,7 +150,7 @@ def snips(
     estimate is still fragile, so it returns None rather than a number that
     would be over-read.
     """
-    if len(logged) < 30:
+    if len(logged) < MIN_LOGGED:
         return None
     rewards = np.array([r for r, _, _ in logged], dtype=np.float64)
     props = np.array([max(p, 1e-6) for _, p, _ in logged], dtype=np.float64)

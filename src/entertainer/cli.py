@@ -1429,57 +1429,36 @@ def audit(
 
 
 def _off_policy_report(engine: Engine, fs) -> None:
-    """Estimate what today's model would have scored on yesterday's slates.
+    """Render the off-policy check.
 
-    Every slate records the probability each title had of being shown, which
-    is what makes this possible at all: the verdicts on record were collected
-    under an older, worse model, and comparing them directly to anything is
-    apples to oranges. Importance weighting corrects for that.
-
-    Reported separately from the prequential numbers and hedged, because it
-    genuinely is the weaker measurement — the estimator is high-variance on a
-    few hundred samples even self-normalised, and it assumes the candidate set
-    has not shifted underneath it.
+    The measurement lives in evaluation.offpolicy; this decides how to phrase
+    it. Hedged deliberately — it is the weaker of the two numbers `ent audit`
+    prints, and reads as authoritative if presented plainly.
     """
-    from .evaluation.prequential import snips
+    from .evaluation import offpolicy
+    from .evaluation.prequential import MIN_LOGGED
 
     with store.session(read_only=True) as con:
-        rows = con.execute(
-            """
-            SELECT i.item_id, i.propensity, e.value / 10.0 AS reward
-            FROM impressions i
-            JOIN events e ON e.item_id = i.item_id
-            WHERE e.kind = 'rate' AND e.value IS NOT NULL AND e.ts >= i.ts
-            """
-        ).fetchall()
-        model = engine.model(con)
+        result = offpolicy.estimate(con, engine, fs)
 
-    usable = [(float(r), float(p), 0.0) for _, p, r in rows if p and p > 0]
-    if len(usable) < 30 or model is None:
+    if result.status in ("not-enough-data", "no-model"):
         console.print(
-            f"\n[dim]off-policy check: {len(usable)} logged recommendations with an outcome; "
-            "needs 30 before the estimate means anything[/dim]"
+            f"\n[dim]off-policy check: {result.n_usable} logged recommendations with an "
+            f"outcome; needs {MIN_LOGGED} before the estimate means anything[/dim]"
         )
         return
-
-    item_ids = [int(i) for i, p, _ in rows if p and p > 0]
-    known = [i for i in item_ids if i in fs.index]
-    if len(known) != len(item_ids):
+    if result.status == "item-space-changed":
         console.print("\n[dim]off-policy check skipped: the item space has changed[/dim]")
         return
-
-    scores = model.predict(fs.vectors_for(item_ids), with_std=False)
-    estimate = snips(usable, list(scores))
-    logged_value = float(np.mean([r for r, _, _ in usable]))
-    if estimate is None:
+    if result.status != "ok":
         return
 
-    verdict = "[green]better[/green]" if estimate > logged_value else "[yellow]no better[/yellow]"
+    verdict = "[green]better[/green]" if result.better else "[yellow]no better[/yellow]"
     console.print(
         f"\n[bold]off-policy estimate[/bold] [dim](weaker evidence; indicative only)[/dim]\n"
-        f"  slates actually shown scored  {logged_value * 10:.2f}/10\n"
-        f"  today's model would have      {estimate * 10:.2f}/10   {verdict}\n"
-        f"  [dim]over {len(usable)} logged recommendations you later rated[/dim]"
+        f"  slates actually shown scored  {result.logged_value * 10:.2f}/10\n"
+        f"  today's model would have      {result.estimate * 10:.2f}/10   {verdict}\n"
+        f"  [dim]over {result.n_usable} logged recommendations you later rated[/dim]"
     )
 
 
