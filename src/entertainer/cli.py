@@ -1052,6 +1052,7 @@ def rate(
     except ImportError:
         _fail("install the web extra: uv pip install -e '.[web]'")
 
+    from .web import serve
     from .web.app import EMPTY_CATALOGUE, _catalogue_size, create_app
 
     size = _catalogue_size()
@@ -1065,33 +1066,9 @@ def rate(
     if not use_live and size < EMPTY_CATALOGUE:
         _fail("no catalogue — run `ent setup`, `ent bundle import <file>`, or use --live")
 
-    if lan:
-        host = "0.0.0.0"  # noqa: S104 - deliberate, and gated behind a token
-    off_loopback = host not in ("127.0.0.1", "localhost", "::1")
-
-    # A token is mandatory off the loopback interface. The page writes to the
-    # verdict log, so an unauthenticated copy on a shared network is somebody
-    # else's write access to your taste profile.
-    if off_loopback and not token:
-        import secrets
-
-        token = secrets.token_urlsafe(12)
-
-    display_host = host
-    if host == "0.0.0.0":  # noqa: S104
-        import socket
-
-        try:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            probe.connect(("8.8.8.8", 80))
-            display_host = probe.getsockname()[0]
-            probe.close()
-        except OSError:
-            display_host = "localhost"
-
-    url = f"http://{display_host}:{port}"
-    if token:
-        url += f"?token={token}"
+    binding = serve.resolve(host=host, port=port, lan=lan, token=token)
+    off_loopback = binding.off_loopback
+    url = binding.url()
     console.print(
         Panel.fit(
             f"[bold]{url}[/bold]\n\n"
@@ -1120,8 +1097,8 @@ def rate(
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(
-        create_app(token=token or None, live=use_live),
-        host=host, port=port, log_level="warning",
+        create_app(token=binding.token, live=use_live),
+        host=binding.host, port=binding.port, log_level="warning",
     )
 
 
