@@ -285,6 +285,7 @@ def encode_resumable(
     fresh: bool = False,
     name: str | None = None,
     compact: bool = True,
+    on_chunk=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Encode a whole catalogue, reusing every card that has been seen before.
 
@@ -299,7 +300,9 @@ def encode_resumable(
     rather than at the end. The result is always in the order of ``ids``.
     ``fresh`` ignores what is cached, though new vectors are still written.
     ``compact`` drops cached vectors that ``ids`` does not use; only a pass over
-    the whole catalogue knows which those are.
+    the whole catalogue knows which those are. ``on_chunk`` receives
+    (encoded, to_encode, from_cache) as each chunk is persisted, which is how
+    Build Studio watches a stage that would otherwise be silent for an hour.
     """
     directory = _cache_dir(stem)
     directory.mkdir(parents=True, exist_ok=True)
@@ -343,8 +346,12 @@ def encode_resumable(
             cached_rows += len(chunk)
             for k, v in zip(chunk_keys, mat, strict=True):
                 cache[k] = v
+            if on_chunk:
+                on_chunk(start + len(chunk), len(todo), len(texts) - len(todo))
     elif texts:
         console.print(f"[green]all {len(texts):,} cards already encoded[/green]")
+        if on_chunk:
+            on_chunk(0, 0, len(texts))
 
     all_mat = (
         np.vstack([cache[k] for k in keys]).astype(np.float32)

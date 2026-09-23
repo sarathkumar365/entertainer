@@ -1,23 +1,487 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>entertainer — Build Studio</title>
 <style>
-  :root{--bg:#050505;--ink:#f2f2f0;--dim:#777;--line:rgba(255,255,255,.15);--soft:rgba(255,255,255,.05)}
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
-  header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid var(--line);letter-spacing:.06em;font-size:12px;text-transform:uppercase}.brand{font-weight:650}.status{color:var(--dim)}.status::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin:0 8px 1px 0}.status.live{color:var(--ink)}
-  main{max-width:860px;margin:0 auto;padding:44px 22px 28px;text-align:center}.stage{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);min-height:18px}.title{font-size:clamp(25px,5vw,48px);font-weight:420;letter-spacing:-.045em;line-height:1.05;margin:11px auto 0;max-width:700px}.core{position:relative;width:min(560px,94vw);height:370px;margin:8px auto -3px}.core:after{content:"";position:absolute;left:50%;top:50%;width:86px;height:86px;translate:-50% -50%;border-radius:50%;background:radial-gradient(circle,#fff 0 3%,rgba(255,255,255,.45) 6%,rgba(255,255,255,.04) 34%,transparent 68%);filter:blur(.1px);animation:breathe 3.2s ease-in-out infinite}@keyframes breathe{50%{scale:1.18;opacity:.72}}
-  svg{width:100%;height:100%;overflow:visible}.edge{stroke:rgba(255,255,255,.13);stroke-width:1}.edge.live{stroke:#fff;stroke-width:1.2;stroke-dasharray:3 9;animation:signal 1.6s linear infinite}@keyframes signal{to{stroke-dashoffset:-24}}.node{fill:#080808;stroke:rgba(255,255,255,.45);stroke-width:1}.node.done{fill:#f2f2f0}.node.live{fill:#fff;filter:drop-shadow(0 0 8px white);animation:nodebreathe 2.4s ease-in-out infinite}@keyframes nodebreathe{50%{r:8}}
-  .readout{display:flex;align-items:baseline;justify-content:center;gap:16px;margin-top:-18px}.percent{font-size:36px;letter-spacing:-.06em;font-variant-numeric:tabular-nums}.label{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--dim)}.meter{width:min(420px,92vw);height:2px;background:var(--soft);margin:18px auto 0;overflow:hidden}.meter i{display:block;height:100%;width:0;background:var(--ink);transition:width .45s ease}.detail{margin:30px auto 0;max-width:600px;border-top:1px solid var(--line);text-align:left}.detail summary{cursor:pointer;list-style:none;padding:14px 2px;color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.detail summary::-webkit-details-marker{display:none}.detail summary::after{content:"+";float:right;color:var(--ink);font-size:16px;line-height:12px}.detail[open] summary::after{content:"−"}.details-inner{padding:5px 2px 18px;color:var(--dim);font-size:12px;display:grid;gap:8px}.row{display:flex;justify-content:space-between;gap:10px}.row b{font-weight:500;color:var(--ink);text-align:right}.empty{padding:104px 0;color:var(--dim);font-size:13px}.empty strong{display:block;color:var(--ink);font-size:24px;font-weight:430;letter-spacing:-.03em;margin-bottom:8px}.history{margin-top:22px;color:var(--dim);font-size:11px}.history button{background:transparent;color:var(--dim);border:0;padding:0;text-decoration:underline;cursor:pointer;font:inherit}.error{color:#e5baba}@media(prefers-reduced-motion:reduce){.core:after,.node.live,.edge.live{animation:none}}
-</style></head>
+/* Same monochrome system as the app: hierarchy from opacity, never hue.
+   The app reserves its one accent for rated titles, so this page uses none. */
+:root{
+  --void:#08080a; --raise:#0e0e11;
+  --fg:#fafafa; --fg-2:#85858f; --fg-3:#4a4a54;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.04);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --spring:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--void);color:var(--fg);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+.label{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-3)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
+  padding:12px 20px;border-bottom:1px solid var(--line-2);
+  background:color-mix(in srgb,var(--void) 88%,transparent);backdrop-filter:blur(12px)}
+.brand{font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+  color:var(--fg-2);margin-right:auto;white-space:nowrap}
+.brand b{color:var(--fg);font-weight:500}
+.state{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--fg-3)}
+.dot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.state[data-status="running"]{color:var(--fg)}
+@media (max-width:560px){
+  .nav{gap:8px;padding:10px 16px}
+  .brand{font-size:9px;letter-spacing:.18em}
+  main{padding:32px 16px 56px}
+}
+.state[data-status="running"] .dot{animation:pulse 1.8s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+select{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--fg-2);
+  background:var(--raise);border:1px solid var(--line);border-radius:4px;padding:5px 7px;cursor:pointer;
+  min-width:0;max-width:38vw;text-overflow:ellipsis}
+select:hover{color:var(--fg)}
+
+main{max-width:760px;margin:0 auto;padding:44px 20px 64px}
+
+/* Readout: the number is the subject, the stage name is its caption. */
+.readout{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.pct{font-family:var(--mono);font-size:clamp(46px,10vw,76px);letter-spacing:-.05em;line-height:.9;font-variant-numeric:tabular-nums}
+.pct small{font-size:.3em;letter-spacing:.06em;color:var(--fg-3);margin-left:6px;vertical-align:super}
+.clock{text-align:right}
+.clock .value{font-family:var(--mono);font-size:18px;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:5px}
+.now{margin:22px 0 0;font-size:19px;letter-spacing:-.025em;font-weight:500;min-height:25px}
+.note{margin:8px 0 0;font-size:12.5px;line-height:1.6;color:var(--fg-3);max-width:58ch}
+.note.bad{color:var(--fg-2);border-left:2px solid var(--fg-3);padding-left:12px}
+.note code,.empty code{font-family:var(--mono);font-size:.92em;color:var(--fg-2);
+  background:rgba(255,255,255,.05);padding:2px 6px;border-radius:4px}
+
+.rail{height:1px;background:var(--line);margin:22px 0 0;overflow:hidden}
+.rail i{display:block;height:100%;width:0;background:var(--fg);transition:width .6s var(--spring)}
+
+/* One row per stage: the pipeline is the diagram, no decoration needed. */
+.stages{margin:34px 0 0;border-top:1px solid var(--line-2)}
+.stage{display:grid;grid-template-columns:26px 1fr auto;gap:12px;align-items:baseline;
+  padding:13px 2px;border-bottom:1px solid var(--line-2);color:var(--fg-3);
+  transition:color .35s var(--spring)}
+.stage .idx{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--fg-3)}
+.stage .name{font-size:13.5px;letter-spacing:-.01em}
+.stage .meta{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  font-variant-numeric:tabular-nums;color:var(--fg-3)}
+.stage .why{grid-column:2/-1;margin:6px 0 0;font-size:11.5px;line-height:1.55;color:var(--fg-3)}
+.stage[data-status="complete"]{color:var(--fg-2)}
+.stage[data-status="complete"] .name{color:var(--fg-2)}
+.stage[data-status="running"]{color:var(--fg)}
+.stage[data-status="running"] .name{color:var(--fg)}
+.stage[data-status="running"] .meta{color:var(--fg)}
+.stage[data-status="failed"] .name,.stage[data-status="failed"] .meta{color:var(--fg)}
+.stage[data-status="stalled"]{color:var(--fg-2)}
+.stage[data-status="stalled"] .name{color:var(--fg-2)}
+/* A running stage has no percentage of its own, so it reads as motion instead. */
+.stage[data-status="running"] .idx{position:relative}
+.stage[data-status="running"] .idx:after{content:"";position:absolute;left:-14px;top:.35em;
+  width:5px;height:5px;border-radius:50%;background:var(--fg);animation:pulse 1.8s ease-in-out infinite}
+
+/* A running stage carries its own count, so it gets its own thin bar. */
+.sub{grid-column:2/-1;display:flex;align-items:center;gap:10px;margin:8px 0 0}
+.sub-rail{flex:1;height:1px;background:var(--line);overflow:hidden}
+.sub-rail i{display:block;height:100%;background:var(--fg-2);transition:width .6s var(--spring)}
+.sub-text{font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--fg-2);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+.disclose{display:flex;align-items:center;gap:8px;margin:20px 0 0;
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fg-3);background:none;border:0;padding:4px 0;cursor:pointer;
+  transition:color .25s var(--spring)}
+.disclose:hover{color:var(--fg)}
+.disclose span{font-size:12px;line-height:1}
+.activity{margin:12px 0 0;border:1px solid var(--line-2);border-radius:8px;background:var(--raise);
+  padding:14px 16px;max-height:300px;overflow:auto}
+.activity ol{margin:0;padding:0;list-style:none;display:grid;gap:7px}
+.activity li{display:grid;grid-template-columns:62px 1fr;gap:12px;align-items:baseline;
+  font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--fg-2)}
+.activity time{color:var(--fg-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.activity li.live{color:var(--fg)}
+.activity .quiet{color:var(--fg-3)}
+
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:18px;margin:32px 0 0}
+.fact .value{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em;margin-top:6px;
+  color:var(--fg-2);word-break:break-word}
+
+.empty{border:1px dashed var(--line);border-radius:10px;padding:56px 24px;text-align:center;
+  color:var(--fg-3);font-size:13px;line-height:1.7}
+.empty h1{font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--fg);margin:0 0 10px}
+
+.enter{animation:fade-up .5s var(--spring) both}
+@keyframes fade-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+</style>
+</head>
 <body>
-<header><div class="brand">entertainer <span style="color:var(--dim)">/ build</span></div><div class="status" id="status">waiting</div></header>
-<main id="app"><div class="empty"><strong>Build Studio</strong>Run <code>ent setup</code> in another terminal.<br>Its local progress will appear here.</div></main>
+
+<nav class="nav">
+  <div class="brand">entertainer <b>build studio</b></div>
+  <select id="picker" aria-label="Build" hidden></select>
+  <div class="state" id="state" data-status="waiting"><span class="dot"></span><span id="state-text">waiting</span></div>
+</nav>
+
+<main id="app"></main>
+
 <script>
-const $=s=>document.querySelector(s); let selected=null;
-const labels={sources:'Verifying source data',catalogue:'Assembling the catalogue',tmdb:'Gathering film context',prune:'Refining the catalogue',embeddings:'Forming the movie signal field',cf:'Learning audience patterns',fusion:'Joining the signals',prior:'Calibrating the starting point'};
-function mesh(stages,active){const points=[[88,170],[145,80],[170,267],[270,45],[285,150],[275,300],[390,80],[430,213],[505,146],[470,315]];let edges='';for(let i=0;i<points.length;i++)for(let j=i+1;j<points.length;j++)if(Math.hypot(points[i][0]-points[j][0],points[i][1]-points[j][1])<165){const live=i===4||j===4;edges+=`<line class="edge ${live?'live':''}" x1="${points[i][0]}" y1="${points[i][1]}" x2="${points[j][0]}" y2="${points[j][1]}"/>`}const complete=stages.filter(s=>s.status==='complete').length;return `<svg viewBox="0 0 590 355" aria-label="Abstract live signal field"><g>${edges}</g>${points.map((p,i)=>`<circle class="node ${i<complete?'done':''} ${i===4&&active?'live':''}" cx="${p[0]}" cy="${p[1]}" r="${i===4?7:4}"/>`).join('')}</svg>`}
-function render(data){const status=data.status||'running', stages=data.stages||[], current=stages.find(s=>s.status==='running'), done=stages.filter(s=>s.status==='complete'||s.status==='skipped').length, pct=status==='complete'?100:Math.round(done/stages.length*100);$('#status').className='status '+(status==='running'?'live':status==='failed'?'error':'');$('#status').textContent=status==='running'?'building':status==='complete'?'complete':status==='failed'?'needs attention':'waiting';$('#app').innerHTML=`<div class="stage">${status==='running'?'live build':status}</div><h1 class="title">${current?labels[current.id]||current.label:status==='complete'?'The system is ready':'Build needs attention'}</h1><div class="core">${mesh(stages,current)}</div><div class="readout"><span class="percent">${pct}%</span><span class="label">${done} / ${stages.length} stages</span></div><div class="meter"><i style="width:${pct}%"></i></div><details class="detail"><summary>Build detail</summary><div class="details-inner">${stages.map(s=>`<div class="row"><span>${s.label}</span><b>${s.status}${s.elapsed_seconds?` · ${Math.round(s.elapsed_seconds)}s`:''}</b></div>`).join('')}<div class="row"><span>Started</span><b>${new Date(data.started_at).toLocaleString()}</b></div>${data.manifest_id?`<div class="row"><span>Manifest</span><b>${data.manifest_id}</b></div>`:''}</div></details>`}
-async function refresh(){try{const d=await fetch('/api/builds').then(r=>r.json());const current=selected?d.builds.find(x=>x.id===selected):d.current;if(current)render(current);else {$('#status').textContent='waiting';$('#app').innerHTML='<div class="empty"><strong>Build Studio</strong>Run <code>ent setup</code> in another terminal.<br>Its local progress will appear here.</div>'}}catch(e){$('#status').className='status error';$('#status').textContent='offline'}}refresh();setInterval(refresh,1000);
-</script></body></html>
+"use strict";
+
+const $ = (sel) => document.querySelector(sel);
+const STATE_WORDS = {
+  running: "building",
+  complete: "complete",
+  failed: "needs attention",
+  interrupted: "interrupted",
+};
+// Stage labels are written for the terminal; on screen they can be plainer.
+const LABELS = {
+  sources: "Checking your source data",
+  catalogue: "Assembling the catalogue",
+  tmdb: "Gathering film details",
+  prune: "Trimming to your languages",
+  embeddings: "Turning descriptions into signals",
+  cf: "Learning audience patterns",
+  fusion: "Fusing the signals together",
+  prior: "Calibrating a starting point",
+};
+const DONE = new Set(["complete", "skipped"]);
+const FINISHED = new Set(["complete", "failed", "interrupted"]);
+
+let open_activity = false;  // the log stays hidden until it is asked for
+let selected = null;   // build id pinned by the picker, else the newest build
+let stream = null;     // EventSource for the build currently on screen
+let streaming = null;  // build id that `stream` follows
+let latest = null;     // last rendered record, for the ticking clock
+let activity = [];     // event-log tail, only fetched while the panel is open
+let activity_error = null;
+let at_log_end = true;  // whether the reader is pinned to the newest line
+
+const escape = (value) =>
+  String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const parse = (value) => {
+  const at = Date.parse(String(value ?? ""));
+  return Number.isNaN(at) ? null : at;
+};
+
+function duration(seconds) {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  const whole = Math.max(0, Math.round(seconds));
+  if (whole < 60) return whole + "s";
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 60) return minutes + "m " + String(whole % 60).padStart(2, "0") + "s";
+  return Math.floor(minutes / 60) + "h " + String(minutes % 60).padStart(2, "0") + "m";
+}
+
+function elapsed(build) {
+  const from = parse(build.started_at);
+  if (from == null) return null;
+  const to = build.status === "running"
+    ? Date.now()
+    : parse(build.finished_at) ?? parse(build.updated_at) ?? Date.now();
+  return (to - from) / 1000;
+}
+
+function moment(value) {
+  const at = parse(value);
+  if (at == null) return "—";
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  });
+}
+
+function headline(build, current) {
+  if (current) return LABELS[current.id] || current.label;
+  if (build.status === "complete") return "Your system is ready";
+  if (build.status === "failed") return "The build stopped early";
+  if (build.status === "interrupted") return "The build is no longer reporting";
+  return "Waiting for the first stage";
+}
+
+function subtext(build, failed) {
+  if (failed && failed.error) return escape(failed.error);
+  if (build.status === "interrupted") {
+    return "Its terminal stopped writing progress. Run <code>ent setup</code> again to resume from the last finished stage.";
+  }
+  if (build.status === "complete") {
+    return "Every stage finished. You can close this page and start rating titles.";
+  }
+  return "";
+}
+
+/* How much of a running stage is done, or null when it never reports counts. */
+function share(stage) {
+  const total = Number(stage.total);
+  const done = Number(stage.done);
+  if (!Number.isFinite(total) || !Number.isFinite(done) || total <= 0) return null;
+  return Math.min(1, Math.max(0, done / total));
+}
+
+function remaining(stage, fraction) {
+  const from = parse(stage.started_at);
+  if (from == null || !fraction) return null;
+  const spent = (Date.now() - from) / 1000;
+  if (spent < 20) return null;  // too early for the estimate to mean anything
+  return (spent / fraction) - spent;
+}
+
+function stageRow(stage, index, live) {
+  // A stage left "running" by a build that stopped reporting is not running.
+  const status = stage.status === "running" && !live ? "stalled" : stage.status || "pending";
+  const fraction = status === "running" || status === "stalled" ? share(stage) : null;
+  const meta = status === "complete"
+    ? duration(stage.elapsed_seconds)
+    : status === "pending" ? "queued"
+    : status === "stalled" ? "stalled"
+    : fraction != null ? Math.round(fraction * 100) + "%"
+    : status;
+  // A failed stage's error is already the headline; do not print it twice.
+  const why = status === "skipped" ? stage.reason : null;
+  const left = fraction != null && status === "running" ? remaining(stage, fraction) : null;
+  const counts = fraction != null
+    ? `${Number(stage.done).toLocaleString()} / ${Number(stage.total).toLocaleString()}${
+        left != null ? " · " + duration(left) + " left" : ""}`
+    : null;
+  return `<div class="stage" data-status="${escape(status)}">
+      <span class="idx">${String(index + 1).padStart(2, "0")}</span>
+      <span class="name">${escape(LABELS[stage.id] || stage.label || stage.id)}</span>
+      <span class="meta">${escape(meta)}</span>
+      ${counts ? `<div class="sub">
+        <div class="sub-rail"><i style="width:${(fraction * 100).toFixed(1)}%"></i></div>
+        <div class="sub-text">${escape(counts)}</div>
+      </div>` : ""}
+      ${why ? `<p class="why">${escape(why)}</p>` : ""}
+    </div>`;
+}
+
+function render(build) {
+  latest = build;
+  const stages = Array.isArray(build.stages) ? build.stages : [];
+  const status = build.status || "running";
+  const live = status === "running";
+  const current = live ? stages.find((s) => s.status === "running") : null;
+  const failed = stages.find((s) => s.status === "failed");
+  const done = stages.filter((s) => DONE.has(s.status)).length;
+  // A stage that reports counts moves the headline number while it runs,
+  // instead of the screen freezing for the hours one stage can take.
+  const partial = current ? share(current) || 0 : 0;
+  const pct = status === "complete"
+    ? 100
+    : stages.length ? Math.floor(((done + partial) / stages.length) * 100) : 0;
+  const note = subtext(build, failed);
+
+  $("#state").dataset.status = status;
+  $("#state-text").textContent = STATE_WORDS[status] || status;
+
+  $("#app").innerHTML = `
+    <div class="readout">
+      <div>
+        <div class="label">progress</div>
+        <div class="pct">${pct}<small>%</small></div>
+      </div>
+      <div class="clock">
+        <div class="label">${status === "complete" ? "took" : "elapsed"}</div>
+        <div class="value" id="clock">${duration(elapsed(build))}</div>
+      </div>
+    </div>
+    <div class="rail" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100">
+      <i style="width:${pct}%"></i>
+    </div>
+    <h1 class="now" aria-live="polite">${escape(headline(build, current))}</h1>
+    ${note ? `<p class="note${failed || status === "interrupted" ? " bad" : ""}">${note}</p>` : ""}
+    <div class="stages">${stages.map((stage, i) => stageRow(stage, i, live)).join("")}</div>
+    <button class="disclose" id="disclose" aria-expanded="${open_activity}" aria-controls="activity">
+      <span>${open_activity ? "−" : "+"}</span>${open_activity ? "hide activity" : "what is happening"}
+    </button>
+    <div class="activity" id="activity"${open_activity ? "" : " hidden"}>
+      <ol id="activity-list"><li class="quiet"><time></time><span>reading the log…</span></li></ol>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="label">stages</div><div class="value">${done} of ${stages.length}</div></div>
+      <div class="fact"><div class="label">started</div><div class="value">${escape(moment(build.started_at))}</div></div>
+      <div class="fact"><div class="label">last update</div><div class="value">${escape(moment(build.updated_at))}</div></div>
+      <div class="fact"><div class="label">${build.manifest_id ? "manifest" : "build"}</div><div class="value">${escape(build.manifest_id || build.id || "—")}</div></div>
+    </div>`;
+
+  $("#disclose").addEventListener("click", () => {
+    open_activity = !open_activity;
+    render(latest);
+    if (open_activity) loadActivity(build.id);
+  });
+  if (open_activity) {
+    drawActivity(activity, build);
+    loadActivity(build.id);
+  }
+}
+
+/* Plain-language lines for the event log, which is written for machines. */
+function sentence(event, build) {
+  const stage = (build.stages || []).find((s) => s.id === event.stage);
+  const name = stage ? (LABELS[stage.id] || stage.label) : event.stage;
+  switch (event.kind) {
+    case "build_started": return "Build started";
+    case "build_complete": return "Build finished" + (event.manifest_id ? ` · ${event.manifest_id}` : "");
+    case "stage_started": return `Started — ${name}`;
+    case "stage_complete": return `Finished — ${name} (${duration(event.elapsed_seconds)})`;
+    case "stage_skipped": return `Skipped — ${name}: ${event.reason}`;
+    case "stage_failed": return `Failed — ${name}: ${event.error}`;
+    default: return event.kind;
+  }
+}
+
+function drawActivity(events, build) {
+  const list = $("#activity-list");
+  if (!list) return;
+  const panel = $("#activity");
+  if (panel && panel.isConnected) {
+    at_log_end = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 24;
+  }
+  const current = (build.stages || []).find((s) => s.status === "running");
+  const rows = (events || []).map(
+    (event) => `<li><time>${escape(moment(event.at))}</time><span>${escape(sentence(event, build))}</span></li>`
+  );
+  // The newest line is what the build is doing right now, which the log
+  // cannot know: it only gets an entry once the stage ends.
+  if (current && current.note) {
+    rows.push(`<li class="live"><time>${escape(moment(build.updated_at))}</time><span>${escape(current.note)}</span></li>`);
+  }
+  if (activity_error) rows.push(`<li class="quiet"><time></time><span>${escape(activity_error)}</span></li>`);
+  list.innerHTML = rows.length
+    ? rows.join("")
+    : `<li class="quiet"><time></time><span>Nothing logged yet.</span></li>`;
+  // Follow the newest line only for a reader who is already at the end:
+  // snapping back every poll would make the earlier lines unreadable.
+  if (panel && at_log_end) panel.scrollTop = panel.scrollHeight;
+}
+
+async function loadActivity(build_id) {
+  try {
+    const response = await fetch(`/api/builds/${encodeURIComponent(build_id)}/activity`);
+    if (response.ok) {
+      activity = (await response.json()).events || [];
+      activity_error = null;
+    } else {
+      // A Studio process started before this page existed has no activity
+      // route; say so rather than sitting on "reading the log…" forever.
+      activity = [];
+      activity_error = "No activity log from this Studio process — restart it with ent studio.";
+    }
+  } catch (error) {
+    activity_error = "Cannot reach Build Studio.";
+    activity = [];
+  }
+  if (open_activity && latest) drawActivity(activity, latest);
+}
+
+function renderEmpty() {
+  latest = null;
+  $("#state").dataset.status = "waiting";
+  $("#state-text").textContent = "waiting";
+  $("#app").innerHTML = `<div class="empty enter">
+      <h1>Nothing building yet</h1>
+      Run <code>ent setup</code> in another terminal.<br>
+      Progress appears here as each stage finishes.
+    </div>`;
+}
+
+function renderOffline() {
+  latest = null;
+  $("#state").dataset.status = "failed";
+  $("#state-text").textContent = "offline";
+  $("#app").innerHTML = `<div class="empty">
+      <h1>Studio is not reachable</h1>
+      Restart it with <code>ent studio</code>.
+    </div>`;
+}
+
+function fillPicker(builds) {
+  const picker = $("#picker");
+  picker.hidden = builds.length < 2;
+  if (picker.hidden) return;
+  const value = selected || builds[0].id;
+  const options = builds.slice(0, 20).map((build, index) => {
+    const when = parse(build.started_at);
+    const when_text = when == null ? build.id : new Date(when).toLocaleString();
+    return `<option value="${escape(build.id)}"${build.id === value ? " selected" : ""}>${
+      index === 0 ? "latest · " : ""}${escape(when_text)} · ${escape(build.status)}</option>`;
+  }).join("");
+  if (picker.innerHTML !== options) picker.innerHTML = options;
+}
+
+/* A finished build never changes again, so only a running one is streamed. */
+function unfollow() {
+  if (stream) stream.close();
+  stream = streaming = null;
+}
+
+function follow(build) {
+  if (streaming === build.id) return;
+  unfollow();
+  if (FINISHED.has(build.status)) return;
+  const source = new EventSource(`/api/builds/${encodeURIComponent(build.id)}/stream`);
+  source.onmessage = (event) => {
+    try {
+      const row = JSON.parse(event.data);
+      render(row);
+      // The endpoint ends its response once a build is finished, and an
+      // EventSource left open would reconnect to it every few seconds
+      // forever. Polling is enough from here.
+      if (FINISHED.has(row.status)) unfollow();
+    } catch (error) {
+      /* Fall back to the next poll rather than blanking the page. */
+    }
+  };
+  source.onerror = () => { source.close(); if (stream === source) { stream = streaming = null; } };
+  stream = source;
+  streaming = build.id;
+}
+
+async function poll() {
+  try {
+    const response = await fetch("/api/builds");
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json();
+    const builds = data.builds || [];
+    fillPicker(builds);
+    const build = (selected && builds.find((row) => row.id === selected)) || data.current;
+    if (!build) { renderEmpty(); return; }
+    follow(build);
+    // The stream owns the screen once it is live; polling only finds new builds.
+    if (!streaming || !latest || latest.id !== build.id) render(build);
+  } catch (error) {
+    renderOffline();
+  }
+}
+
+$("#picker").addEventListener("change", (event) => {
+  selected = event.target.value;
+  // Close the old stream here: a message arriving before poll() resolves
+  // would otherwise paint the build the user just navigated away from.
+  unfollow();
+  latest = null;
+  activity = [];
+  activity_error = null;
+  at_log_end = true;
+  poll();
+});
+
+// The server only writes on stage boundaries, so the clock ticks client-side.
+setInterval(() => {
+  if (!latest || latest.status !== "running") return;
+  const clock = $("#clock");
+  if (clock) clock.textContent = duration(elapsed(latest));
+}, 1000);
+
+setInterval(() => {
+  if (open_activity && latest) loadActivity(latest.id);
+}, 5000);
+
+renderEmpty();
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

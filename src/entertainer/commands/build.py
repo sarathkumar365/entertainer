@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from threading import Thread
@@ -26,6 +27,25 @@ from ..render import console, tables
 from ..render import fail as _fail
 from ._apps import app, data_app
 from ._shared import require_catalog
+
+# (done, total, note) — how a long stage tells Build Studio it is still moving.
+ProgressFn = Callable[[int, int, str], None]
+
+
+def _watch(reporter: Reporter, stage_id: str, part: int = 0, parts: int = 1) -> ProgressFn:
+    """Feed one pass's counts to the reporter as a fraction of its stage."""
+
+    def report(done: int, total: int, note: str) -> None:
+        span = max(total, 1)
+        reporter.progress(
+            stage_id,
+            done=part * span + done,
+            total=parts * span,
+            note=note,
+            final=done >= total,
+        )
+
+    return report
 
 
 @app.command()
@@ -174,13 +194,19 @@ def _foreground_stages(
     if not settings.skip_enrich and has_tmdb():
         console.rule("[bold]3/8 enriching from TMDB")
         with reporter.stage("tmdb"):
-            data_enrich(
+            # Two passes share one stage, so each reports its own half of it.
+            enrich_titles(
                 limit=settings.enrich_limit or None,
                 concurrency=settings.concurrency,
                 keywords=False,
                 floor_scale=settings.floor_scale,
+                progress=_watch(reporter, "tmdb", part=0, parts=2),
             )
-            data_keywords(top=settings.keyword_target, concurrency=settings.concurrency)
+            backfill_keywords(
+                top=settings.keyword_target,
+                concurrency=settings.concurrency,
+                progress=_watch(reporter, "tmdb", part=1, parts=2),
+            )
     else:
         console.rule("[bold]3/8 TMDB enrichment skipped")
         reporter.skip("tmdb", "disabled by --skip-enrich or no TMDB credentials")
@@ -190,7 +216,12 @@ def _foreground_stages(
         data_prune(scale=settings.floor_scale, dry_run=False)
     console.rule("[bold]5/8 encoding item text")
     with reporter.stage("embeddings"):
-        data_embed(batch_size=settings.encode_batch, limit=None, fresh=False)
+        encode_catalogue(
+            batch_size=settings.encode_batch,
+            limit=None,
+            fresh=False,
+            progress=_watch(reporter, "embeddings"),
+        )
     with store.session() as con:
         store.set_meta(con, pipeline.CATALOGUE_INPUTS_KEY, fingerprint)
 
@@ -319,6 +350,23 @@ def data_enrich(
     ),
 ) -> None:
     """Fill in synopses, keywords and languages from TMDB."""
+    enrich_titles(
+        limit=limit, concurrency=concurrency, keywords=keywords, floor_scale=floor_scale
+    )
+
+
+def enrich_titles(
+    limit: int | None = None,
+    concurrency: int = 40,
+    keywords: bool = True,
+    floor_scale: float = 1.0,
+    progress: ProgressFn | None = None,
+) -> None:
+    """The enrichment pass itself, separate from its command wrapper.
+
+    ``progress`` receives (done, total, note) as batches land, which is how a
+    multi-hour stage reaches Build Studio instead of going silent until it
+    finishes."""
     from ..data import catalog, tmdb
 
     if not has_tmdb():
@@ -335,6 +383,8 @@ def data_enrich(
     def flush(batch):
         catalog.apply_enrichment(con, batch)
         written["n"] += len(batch)
+        if progress:
+            progress(written["n"], len(pending), f"enriching {written['n']:,} of {len(pending):,} titles")
 
     try:
         tmdb.enrich(pending, concurrency=concurrency, keywords=keywords, on_batch=flush)
@@ -351,6 +401,14 @@ def data_keywords(
     concurrency: int = typer.Option(40),
 ) -> None:
     """Backfill TMDB keywords for the titles most likely to be encountered."""
+    backfill_keywords(top=top, concurrency=concurrency)
+
+
+def backfill_keywords(
+    top: int = 150_000,
+    concurrency: int = 40,
+    progress: ProgressFn | None = None,
+) -> None:
     from ..data import catalog, tmdb
 
     if not has_tmdb():
@@ -369,6 +427,8 @@ def data_keywords(
     def flush(batch):
         catalog.apply_keywords(con, batch)
         written["n"] += len(batch)
+        if progress:
+            progress(written["n"], len(targets), f"keywords for {written['n']:,} of {len(targets):,} titles")
 
     try:
         tmdb.backfill_keywords(targets, concurrency=concurrency, on_batch=flush)
@@ -391,6 +451,15 @@ def data_embed(
     encodes only new or changed cards, and an interrupted run keeps every
     chunk it finished.
     """
+    encode_catalogue(batch_size=batch_size, limit=limit, fresh=fresh)
+
+
+def encode_catalogue(
+    batch_size: int = 64,
+    limit: int | None = None,
+    fresh: bool = False,
+    progress: ProgressFn | None = None,
+) -> None:
     from ..models import encoder
     from ..models.itemcard import build_card
 
@@ -412,10 +481,21 @@ def data_embed(
     console.print(f"[dim]{len(cards):,} item cards[/dim]")
     console.print(Panel.fit(cards[0], title="example item card", border_style="dim"))
 
+    def chunk_done(encoded: int, to_encode: int, from_cache: int) -> None:
+        if not progress:
+            return
+        note = (
+            f"encoded {encoded:,} of {to_encode:,} new cards ({from_cache:,} from cache)"
+            if to_encode
+            else f"all {from_cache:,} cards already encoded"
+        )
+        progress(encoded, to_encode, note)
+
     # A --limit run sees only part of the catalogue, so compacting would throw
     # away every cached vector outside it.
     ids, mat = encoder.encode_resumable(
-        ids, cards, batch_size=batch_size, fresh=fresh, compact=limit is None
+        ids, cards, batch_size=batch_size, fresh=fresh, compact=limit is None,
+        on_chunk=chunk_done,
     )
     encoder.save(ids, mat)
     console.print(f"[green]embeddings: {mat.shape}[/green]")

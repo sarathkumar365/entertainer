@@ -32,6 +32,7 @@ STAGES = (
 )
 HEARTBEAT_SECONDS = 10
 STALE_SECONDS = HEARTBEAT_SECONDS * 3
+PROGRESS_SECONDS = 2
 
 
 def build_root(root: Path | None = None) -> Path:
@@ -52,6 +53,7 @@ class Reporter:
         self.path.mkdir(parents=True, exist_ok=False)
         self.events_path = self.path / "events.jsonl"
         self._lock = RLock()
+        self._progress_at: dict[str, float] = {}
         self.state: dict[str, Any] = {
             "id": self.build_id,
             "status": "running",
@@ -93,6 +95,48 @@ class Reporter:
             self.state["heartbeat_at"] = now
             self._write_state()
 
+    def progress(
+        self,
+        stage_id: str,
+        done: int,
+        total: int,
+        note: str | None = None,
+        final: bool = False,
+    ) -> None:
+        """Report movement *inside* a stage.
+
+        Several stages run for hours, so stage boundaries alone leave the
+        observer staring at an unchanging screen. Like ``heartbeat`` this only
+        rewrites the state file; the event log stays a record of boundaries.
+        """
+        with self._lock:
+            if self.state["status"] != "running" or self.state["stage"] != stage_id:
+                return
+            stage = self._stage(stage_id)
+            if stage is None:
+                return
+            now = time.monotonic()
+            last = self._progress_at.get(stage_id)
+            # A pass that owns only part of a stage never reaches ``total``,
+            # so "is this the last call?" is the caller's to declare.
+            if last is not None and not final and now - last < PROGRESS_SECONDS:
+                return
+            self._progress_at[stage_id] = now
+            stage["done"] = int(done)
+            stage["total"] = int(total)
+            if note is not None:
+                stage["note"] = note
+            stamp = _now()
+            self.state["updated_at"] = stamp
+            self.state["heartbeat_at"] = stamp
+            self._write_state()
+
+    def _stage(self, stage_id: str) -> dict[str, Any] | None:
+        for stage in self.state["stages"]:
+            if stage["id"] == stage_id:
+                return stage
+        return None
+
     @contextmanager
     def stage(self, stage_id: str, **detail: Any) -> Iterator[None]:
         started = time.monotonic()
@@ -101,6 +145,7 @@ class Reporter:
             for stage in self.state["stages"]:
                 if stage["id"] == stage_id:
                     stage["status"] = "running"
+                    stage["started_at"] = _now()
                     stage.update(detail)
         self.event("stage_started", stage=stage_id, **detail)
         stop = Event()
@@ -126,6 +171,10 @@ class Reporter:
                     if stage["id"] == stage_id:
                         stage["status"] = "complete"
                         stage["elapsed_seconds"] = elapsed
+                        # Counts described work in flight; elapsed describes
+                        # the finished stage, so the two never show together.
+                        for key in ("done", "total", "note"):
+                            stage.pop(key, None)
             self.event("stage_complete", stage=stage_id, elapsed_seconds=elapsed)
         finally:
             stop.set()
@@ -164,6 +213,25 @@ def list_builds(root: Path | None = None) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
     return sorted(records, key=lambda row: row.get("started_at", ""), reverse=True)
+
+
+def read_events(build_id: str, limit: int = 60, root: Path | None = None) -> list[dict[str, Any]]:
+    """The tail of one build's event log, oldest first.
+
+    Studio hides this behind a disclosure, so it is read on demand rather than
+    carried inside every state poll."""
+    path = build_root(root) / build_id / "events.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in lines[-max(1, limit):]:
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
 
 
 def read_build(build_id: str, root: Path | None = None) -> dict[str, Any] | None:
