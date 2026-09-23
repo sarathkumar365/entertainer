@@ -329,6 +329,21 @@ def already_asked(con: duckdb.DuckDBPyConnection) -> set[int]:
     }
 
 
+#: Meta key holding the item ids of the most recent slate, so a verdict can
+#: be given by position instead of by retyping a title. The writer (`ent
+#: recs`) and the readers (the verdict commands) sit far apart, so the key is
+#: named once here rather than spelled out at each end.
+LAST_SLATE = "last_slate"
+
+
+def set_last_slate(con: duckdb.DuckDBPyConnection, item_ids: list[int]) -> None:
+    set_meta(con, LAST_SLATE, [int(i) for i in item_ids])
+
+
+def last_slate(con: duckdb.DuckDBPyConnection) -> list[int]:
+    return [int(i) for i in (get_meta(con, LAST_SLATE) or [])]
+
+
 def new_slate_id() -> str:
     return f"slate-{int(time.time() * 1000):x}"
 
