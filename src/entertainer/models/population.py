@@ -35,6 +35,7 @@ import polars as pl
 from rich.console import Console
 
 from ..config import PATHS
+from ..errors import NotEnoughEvidence
 
 console = Console()
 
@@ -209,7 +210,9 @@ def fit(
     counts = df.group_by("userId").len().filter(pl.col("len") >= MIN_RATINGS)
     candidates = counts["userId"].to_numpy()
     if candidates.size == 0:
-        raise RuntimeError("no MovieLens users with enough ratings to fit a population prior")
+        raise NotEnoughEvidence(
+            "no MovieLens users with enough ratings to fit a population prior"
+        )
 
     rng = np.random.default_rng(seed)
     # group_by order is arbitrary; sort so the seeded sample is reproducible.
@@ -222,7 +225,7 @@ def fit(
 
     W = _taste_vectors(df, fs, item_of_movielens)
     if len(W) < 50:
-        raise RuntimeError(f"only {len(W)} usable taste vectors; need at least 50")
+        raise NotEnoughEvidence(f"only {len(W)} usable taste vectors; need at least 50")
 
     mean = W.mean(axis=0)
     centred = W - mean

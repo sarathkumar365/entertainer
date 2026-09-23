@@ -49,10 +49,11 @@ def add(body: AddRequest, ctx: AppContext = Depends(get_context)) -> dict[str, A
     # recorded and still merges back, because it keys on the IMDb id.
     if not ctx.use_live and item_id not in ctx.engine.features().index:
         content = encoder.encode_texts([build_card(row)], show_progress=False)
-        try:
-            latent = art.project(content)
-        except RuntimeError as exc:
-            raise HTTPException(500, str(exc)) from exc
+        # A fused space too old to project from is ModelNotReady, which the
+        # app-wide handler turns into "the build is unfinished". Catching it
+        # here to re-raise as a 500 said "this broke" about a machine that
+        # is merely part-way through.
+        latent = art.project(content)
         ids, mat = encoder.load()
         encoder.save(np.append(ids, np.int32(item_id)), np.vstack([mat, content]))
         art.item_ids = np.append(art.item_ids, np.int32(item_id))

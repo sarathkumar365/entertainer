@@ -26,6 +26,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 
 from ..config import TMDB_API_BASE, tmdb_credentials
+from ..errors import MissingCredentials
 
 _console = Console()
 
@@ -68,7 +69,9 @@ def _auth() -> tuple[dict[str, str], dict[str, str]]:
     elif key:
         params["api_key"] = key
     else:
-        raise RuntimeError("no TMDB credentials; set TMDB_BEARER or TMDB_API_KEY in .env")
+        raise MissingCredentials(
+            "no TMDB credentials; set TMDB_BEARER or TMDB_API_KEY in .env"
+        )
     return headers, params
 
 

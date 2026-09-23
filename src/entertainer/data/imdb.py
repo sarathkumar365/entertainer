@@ -15,6 +15,7 @@ import polars as pl
 from rich.console import Console
 
 from ..config import KEPT_TITLE_TYPES, MIN_YEAR, PATHS
+from ..errors import MissingSourceData
 
 console = Console()
 
@@ -23,7 +24,7 @@ _READ = dict(separator="\t", quote_char=None, null_values=["\\N"], infer_schema_
 def _raw(name: str):
     path = PATHS.raw / "imdb" / name
     if not path.exists():
-        raise FileNotFoundError(f"missing IMDb dump {path}; run `entertainer fetch` first")
+        raise MissingSourceData(f"missing IMDb dump {path}; run `ent data fetch` first")
     return pl.scan_csv(path, **_READ)
 
 

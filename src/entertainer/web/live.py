@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import httpx
 
 from ..config import TMDB_API_BASE, language_label, tmdb_credentials
+from ..errors import MissingCredentials
 
 # TMDB vote counts vary enormously by industry, so a single floor either
 # floods the feed with Hollywood or returns nothing for Kannada. These are
@@ -49,7 +50,7 @@ def _auth() -> tuple[dict[str, str], dict[str, str]]:
     elif key:
         params["api_key"] = key
     else:
-        raise RuntimeError("no TMDB credentials")
+        raise MissingCredentials("no TMDB credentials")
     return headers, params
 
 

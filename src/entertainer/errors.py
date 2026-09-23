@@ -49,3 +49,21 @@ class CatalogueBusy(EntertainerError):
     state of the system rather than a failure, and a reader that meets it
     should say so rather than raise a driver-level IO error.
     """
+
+
+class MissingSourceData(EntertainerError):
+    """A raw dump the build reads has not been downloaded yet.
+
+    Not a ``FileNotFoundError`` any more, deliberately: the file is absent
+    because a step has not run, which is a state of the build rather than a
+    broken path, and the CLI can only say so once it is told apart from an
+    ordinary IO failure.
+    """
+
+
+class MissingCredentials(EntertainerError):
+    """A TMDB key or bearer token is needed here and none is configured."""
+
+
+class MissingDependency(EntertainerError):
+    """An optional extra this step needs was never installed."""
