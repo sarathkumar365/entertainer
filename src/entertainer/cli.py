@@ -17,7 +17,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from . import profile_io, store
+from . import pipeline, profile_io, store
 from .build_events import Reporter
 from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
@@ -43,7 +43,7 @@ app.add_typer(data_app, name="data")
 
 
 def _require_catalog() -> None:
-    if not PATHS.catalog_db.exists():
+    if not pipeline.catalogue_exists():
         _fail("no catalogue yet — run `ent setup` first")
 
 
@@ -1021,27 +1021,6 @@ def taste(axes: int = typer.Option(6, help="How many latent axes to describe."))
 # --- introspection ----------------------------------------------------------
 
 
-def _next_step(present: dict[str, bool], n_ratings: int) -> str:
-    """What to run next, given what exists.
-
-    A pipeline with eight stages and a three-hour critical path needs to be
-    able to say where it got to. Ordered by dependency, first gap wins.
-    """
-    if not present["catalog"]:
-        return "ent setup"
-    if not present["content_embeddings"]:
-        return "ent data embed"
-    if not present["cf_factors"]:
-        return "ent data cf"
-    if not present["fused_space"]:
-        return "ent data fuse"
-    if n_ratings < 3:
-        return "ent onboard    [dim](or: ent bulk seed.example.txt)[/dim]"
-    if n_ratings < 8:
-        return "ent recs    [dim](a few more verdicts and `ent audit` will work too)[/dim]"
-    return "ent recs"
-
-
 @app.command()
 def rate(
     port: int = typer.Option(8756, help="Port to serve on."),
@@ -1189,7 +1168,7 @@ def stats() -> None:
     table.add_row("tmdb credentials", "[green]set[/green]" if has_tmdb() else "[yellow]absent[/yellow]")
     console.print(table)
 
-    if not PATHS.catalog_db.exists():
+    if not pipeline.catalogue_exists():
         console.print("\n[bold]next:[/bold] [cyan]ent setup[/cyan]")
         return
     with store.session(read_only=True) as con:
@@ -1201,9 +1180,9 @@ def stats() -> None:
         ).fetchall()
         cover = engine.coverage(con)
 
-    if cover["catalog"] and present["fused_space"]:
-        share = cover["fused"] / cover["catalog"]
-        if share < 0.995:
+    if present["fused_space"]:
+        share = pipeline.coverage_is_stale(cover)
+        if share is not None:
             console.print(
                 f"\n[yellow]item space covers {cover['fused']:,} of "
                 f"{cover['catalog']:,} titles ({share:.1%}).[/yellow] "
@@ -1216,7 +1195,8 @@ def stats() -> None:
         t2.add_row(key, f"{value:,}")
     console.print(t2)
     console.print(tables.language_histogram(langs))
-    console.print(f"\n[bold]next:[/bold] [cyan]{_next_step(present, c['ratings'])}[/cyan]")
+    step = pipeline.next_step(present, c["ratings"])
+    console.print(f"\n[bold]next:[/bold] [cyan]{step.command}[/cyan]" + (f"    [dim]({step.note})[/dim]" if step.note else ""))
 
 
 @app.command()
