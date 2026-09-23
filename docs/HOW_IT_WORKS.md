@@ -108,6 +108,8 @@ The helper command gives each action a memorable name:
 ./scripts/entertainer logs app # follow app, studio, or build logs
 ./scripts/entertainer debug    # readiness and recent app errors
 ./scripts/entertainer stop     # stop the managed local servers
+./scripts/entertainer restart  # stop and start both, after a code change
+./scripts/entertainer ui       # rebuild the browser interface
 ```
 
 `build` is intentionally foreground work: you can see its terminal output and
@@ -116,6 +118,41 @@ normal use after a build. The helper writes only PID files and logs under
 `data/runtime/`, while ratings and model artifacts remain in their normal local
 data locations. During a build, the local database may be write-locked; this is
 intentional protection against the app and pipeline changing it at once.
+
+There is a third moment, rarer than the other two: **changing the interface**.
+The browser app is a built bundle committed to the repository, so running it
+needs nothing but Python. Editing it needs Node, and `ui` is the only command
+that does — it installs the dependencies once, rebuilds from
+`src/entertainer/web/ui`, and writes content-hashed filenames so a reload
+picks the new bundle up without any cache to clear.
+
+### What the app shows you, and why it is split up
+
+| screen | what it is for |
+|---|---|
+| `/` | the model itself — it grows as you feed it and its edge steadies as it gets surer |
+| `/recs` | what to watch, each prediction drawn as the distribution it actually is |
+| `/rate` | a grid for scanning, or a keyboard focus mode for volume |
+| `/library` | saved, watched, rated |
+| `/taste` | the learned axes, and your position among the catalogue |
+| `/evidence` | whether it is working |
+
+Two distinctions are load-bearing here, and both are easy to blur.
+
+**Saving is not a verdict.** A save says you intend to watch something. It
+teaches the model nothing, it is reversible, and its only effect is to keep
+the title out of future slates. A verdict says what you thought: it trains the
+model, and the only way to change one is to record another. They share the
+same append-only log, which is why "saved" means *the most recent watchlist
+event for this title says active* rather than *a watchlist event exists*.
+
+**Where a verdict is given changes what it can prove.** Every slate records
+the probability each title had of being shown. A verdict given on `/recs` can
+therefore be matched back to the slate that produced it and weighted by that
+probability, which is what makes "were these recommendations any good?" an
+answerable question. The same verdict given on `/rate` teaches the model just
+as much, but proves nothing about the recommender. That is why `/evidence`
+reports the off-policy estimate separately, and hedges it.
 
 ## Chapter 4 — The model turns history into a taste estimate
 

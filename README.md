@@ -268,29 +268,62 @@ ent setup                # download, build, enrich, embed, factorise, fuse
 
 ---
 
-## Teaching it, quickly
-
-```bash
-ent rate
-```
-
 ## Everyday controls
 
 You do not need to remember ports, background-process commands, or log paths.
-From the project folder, use:
+From the project folder:
 
 ```bash
-./scripts/entertainer start    # recommendation app + Build Studio
-./scripts/entertainer status   # what is running and what model artifacts exist
+./scripts/entertainer start    # the app and Build Studio
+./scripts/entertainer status   # what is running, and which artifacts exist
 ./scripts/entertainer logs app # follow the app log (or: studio, build)
 ./scripts/entertainer debug    # readiness plus recent app errors
 ./scripts/entertainer stop     # stop the managed local services
+./scripts/entertainer restart  # stop and start both, after a code change
+./scripts/entertainer ui       # rebuild the browser interface after editing it
 ```
 
-`start` is for using an already-built recommender. It starts two local pages:
-the movie app on `http://127.0.0.1:8756` and Build Studio on
-`http://127.0.0.1:8757`. `stop` only stops processes launched by this helper;
-it never deletes ratings, catalogue data, model artifacts, or reports.
+`start` is for using an already-built recommender. It puts the app on
+`http://127.0.0.1:8756` and Build Studio on `http://127.0.0.1:8757`. `stop`
+only stops processes this helper launched; it never deletes ratings,
+catalogue data, model artifacts, or reports.
+
+The equivalent without the helper is `ent rate`, which runs in the
+foreground and opens a browser.
+
+### The interface
+
+Six screens, each showing one thing rather than all of them at once:
+
+| | |
+|---|---|
+| `/` | the model itself, drawn as a living thing — it grows with what you tell it and tightens as it gets surer |
+| `/recs` | what to watch, with every prediction drawn as a distribution instead of a number |
+| `/rate` | a poster grid for scanning, or a keyboard-driven focus mode for getting through a lot |
+| `/library` | what you have saved, watched, and rated |
+| `/taste` | the axes it learned, and where you sit among 73,000 titles |
+| `/evidence` | whether any of it is working |
+
+Saving something is deliberately **not** a verdict. It says you intend to
+watch it, never that you liked it, so it teaches the model nothing — it only
+stops the title being recommended again. A verdict is the opposite: it trains
+the model, and the only way to change one is to record another.
+
+Rating a title **from `/recs`** is worth more than rating the same title
+anywhere else. Recommendations are logged with the probability each had of
+being shown, so a verdict given there is the one thing that can answer "were
+these slates actually good?". Nowhere else produces that measurement.
+
+### Changing the interface
+
+The bundle is committed, so running the app needs no `node`. Editing it does:
+
+```bash
+./scripts/entertainer ui       # installs deps on first run, then builds
+```
+
+The source is `src/entertainer/web/ui`. Bundle filenames are content-hashed,
+so a rebuild arrives without clearing any cache.
 
 For a fresh or incomplete model build, use:
 
@@ -355,7 +388,7 @@ ent import verdicts.jsonl            # on the main one
 ## Use
 
 ```bash
-ent rate                             # poster grid at localhost — the fast way to teach it
+ent rate                             # the browser interface — the fast way to teach it
 ent onboard --n 40                   # or cold start in the terminal
 ent recs                             # what to watch
 ent recs --lang ml,ta --movies -k 15
