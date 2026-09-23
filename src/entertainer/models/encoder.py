@@ -126,6 +126,7 @@ def encode_resumable(
     dim: int = ENCODER_DIM_TARGET,
     stem: str = "content",
     shard_size: int = SHARD_SIZE,
+    on_shard=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Encode a whole catalogue, surviving interruption.
 
@@ -159,6 +160,8 @@ def encode_resumable(
                 if z["ids"].shape[0] == chunk_ids.shape[0] and z["mat"].shape[1] == dim:
                     parts.append((z["ids"], z["mat"]))
                     reused += len(chunk_ids)
+                    if on_shard:
+                        on_shard(min(start + shard_size, total), total, True)
                     continue
             except Exception:
                 path.unlink(missing_ok=True)
@@ -181,6 +184,8 @@ def encode_resumable(
         np.savez(tmp, ids=chunk_ids.astype(np.int32), mat=mat.astype(np.float32))
         tmp.replace(path)
         parts.append((chunk_ids.astype(np.int32), mat.astype(np.float32)))
+        if on_shard:
+            on_shard(min(start + shard_size, total), total, False)
 
     if reused:
         console.print(f"[green]reused {reused:,} already-encoded cards[/green]")

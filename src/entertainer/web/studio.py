@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-from ..build_events import list_builds, read_build
+from ..build_events import list_builds, read_build, read_events
 
 STATIC = Path(__file__).parent / "static"
 
@@ -34,6 +34,12 @@ def create_studio_app() -> FastAPI:
         if row is None:
             raise HTTPException(404, "build not found")
         return row
+
+    @app.get("/api/builds/{build_id}/activity")
+    def activity(build_id: str, limit: int = 60) -> dict:
+        if "/" in build_id or "\\" in build_id or read_build(build_id) is None:
+            raise HTTPException(404, "build not found")
+        return {"events": read_events(build_id, limit=min(max(limit, 1), 300))}
 
     @app.get("/api/builds/{build_id}/stream")
     async def stream(build_id: str) -> StreamingResponse:

@@ -28,6 +28,11 @@ start either.
 | Build Studio, `http://127.0.0.1:8757` | a read-only progress page, like a CI dashboard |
 | `ent setup` (the build) | seeding and migrating a very large database — hours, but resumable |
 
+Build Studio shows the eight stages, how far the current one has got (the
+long TMDB and encoding stages report their own counts and a rough time
+remaining), and — behind the "what is happening" toggle — the build's log of
+what started, finished, was skipped or failed.
+
 The build must finish before the app can run. While it is running, it holds
 the database exclusively, so starting the app fails with a DuckDB lock error.
 That is expected.
