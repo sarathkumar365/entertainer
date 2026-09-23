@@ -25,6 +25,9 @@ def _digest(path: Path) -> str | None:
 
 def write(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Write a never-overwritten JSON record and return its metadata."""
+    # Deferred: fusion pulls in sklearn, which a manifest write has no other use for.
+    from .models.fusion import fused_path
+
     PATHS.ensure()
     out = PATHS.reports / "manifests"
     out.mkdir(parents=True, exist_ok=True)
@@ -36,7 +39,7 @@ def write(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         "python": platform.python_version(),
         "artifacts": {
             "catalogue": _digest(PATHS.catalog_db),
-            "fused": _digest(PATHS.artifacts / "fused.npz"),
+            "fused": _digest(fused_path()),
             "prior": _digest(PATHS.artifacts / "population_prior.npz"),
         },
         **payload,

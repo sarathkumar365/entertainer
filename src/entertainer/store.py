@@ -17,6 +17,7 @@ from typing import Any
 import duckdb
 
 from .config import PATHS
+from .resources import duckdb_config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS titles (
@@ -134,13 +135,13 @@ def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     # interface in live mode, where there is no catalogue by design but the
     # verdict log still has to exist.
     if read_only and not PATHS.catalog_db.exists():
-        bootstrap = duckdb.connect(str(PATHS.catalog_db))
+        bootstrap = duckdb.connect(str(PATHS.catalog_db), config=duckdb_config())
         bootstrap.execute(SCHEMA)
         for statement in MIGRATIONS:
             bootstrap.execute(statement)
         bootstrap.close()
 
-    con = duckdb.connect(str(PATHS.catalog_db), read_only=read_only)
+    con = duckdb.connect(str(PATHS.catalog_db), read_only=read_only, config=duckdb_config())
     if not read_only:
         con.execute(SCHEMA)
         for statement in MIGRATIONS:

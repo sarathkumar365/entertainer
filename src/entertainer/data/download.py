@@ -8,6 +8,7 @@ server's content-length.
 from __future__ import annotations
 
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
@@ -96,21 +97,29 @@ def _progress() -> Progress:
 
 
 def fetch_imdb(files: tuple[str, ...] = IMDB_FILES) -> list[Path]:
-    out = []
     with _progress() as bar:
-        for name in files:
-            out.append(fetch(f"{IMDB_BASE}/{name}", PATHS.raw / "imdb" / name, bar))
-    return out
+        return _fetch_imdb(files, bar)
+
+
+def _fetch_imdb(files: tuple[str, ...], bar: Progress, workers: int = 1) -> list[Path]:
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        return list(pool.map(
+            lambda name: fetch(f"{IMDB_BASE}/{name}", PATHS.raw / "imdb" / name, bar), files
+        ))
 
 
 def fetch_movielens() -> Path:
     """Download and unpack MovieLens-32M; returns the extracted directory."""
+    with _progress() as bar:
+        return _fetch_movielens(bar)
+
+
+def _fetch_movielens(bar: Progress) -> Path:
     target = PATHS.raw / "ml-32m"
     if (target / "ratings.csv").exists():
         return target
     archive = PATHS.raw / "ml-32m.zip"
-    with _progress() as bar:
-        fetch(MOVIELENS_URL, archive, bar)
+    fetch(MOVIELENS_URL, archive, bar)
     with zipfile.ZipFile(archive) as zf:
         extract_zip(zf, PATHS.raw)
     # The archive unpacks into ml-32m/ already; guard against a nested layout.
@@ -118,3 +127,15 @@ def fetch_movielens() -> Path:
         for cand in PATHS.raw.glob("ml-32m*/ratings.csv"):
             return cand.parent
     return target
+
+
+def fetch_sources(files: tuple[str, ...] = IMDB_FILES) -> tuple[list[Path], Path]:
+    """Every bulk source at once, under one progress display.
+
+    The files are independent and each is served from a CDN, so the wall
+    time is the slowest file rather than the sum of all seven.
+    """
+    with _progress() as bar, ThreadPoolExecutor(max_workers=2) as pool:
+        movielens = pool.submit(_fetch_movielens, bar)
+        imdb = pool.submit(_fetch_imdb, files, bar, len(files))
+        return imdb.result(), movielens.result()

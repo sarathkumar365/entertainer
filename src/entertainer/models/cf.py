@@ -56,14 +56,42 @@ def _ratings_path():
     return PATHS.raw / "ml-32m" / "ratings.csv"
 
 
+_RATINGS_SCHEMA = {"userId": pl.Int32, "movieId": pl.Int32, "rating": pl.Float32}
+
+
 def load_ratings() -> pl.DataFrame:
+    """MovieLens ratings as (userId Int32, movieId Int32, rating Float32).
+
+    Parsing the 836 MB CSV costs tens of seconds and `data cf`, `data prior`
+    and the offline simulation each need it, so the first read leaves a
+    sibling parquet behind. It is rebuilt whenever the CSV changes.
+    """
     path = _ratings_path()
+    cache = path.with_suffix(".parquet")
+    stamp = cache.with_name(cache.name + ".source")
+    # Size and mtime together, compared for equality rather than "newer":
+    # re-extracting the zip restores the archive's old mtime, which a
+    # newer-than check would take as proof the stale cache is still good.
+    source = f"{path.stat().st_size}:{path.stat().st_mtime_ns}" if path.exists() else None
+    if cache.exists() and stamp.exists() and (
+        source is None or stamp.read_text().strip() == source
+    ):
+        return pl.read_parquet(cache).select("userId", "movieId", "rating").cast(_RATINGS_SCHEMA)
     if not path.exists():
         raise FileNotFoundError(f"missing {path}; run `entertainer fetch` first")
-    return pl.read_csv(
-        path,
-        schema_overrides={"userId": pl.Int32, "movieId": pl.Int32, "rating": pl.Float32},
-    ).select("userId", "movieId", "rating")
+    df = pl.read_csv(path, schema_overrides=_RATINGS_SCHEMA).select("userId", "movieId", "rating")
+    # Write-then-rename, stamp last: a crash mid-write must never leave a
+    # truncated cache that a matching stamp would vouch for.
+    tmp = cache.with_name(f".{cache.name}.{os.getpid()}.tmp")
+    try:
+        stamp.unlink(missing_ok=True)
+        df.write_parquet(tmp)
+        os.replace(tmp, cache)
+        stamp.write_text(source)
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        console.print(f"[yellow]could not cache {cache.name}: {exc}[/yellow]")
+    return df
 
 
 def build_matrix(
@@ -83,11 +111,10 @@ def build_matrix(
 
     users = np.sort(df["userId"].unique().to_numpy())
     items = np.sort(df["movieId"].unique().to_numpy())
-    uidx = {u: i for i, u in enumerate(users.tolist())}
-    iidx = {m: i for i, m in enumerate(items.tolist())}
-
-    rows = np.fromiter((uidx[u] for u in df["userId"].to_list()), dtype=np.int32, count=df.height)
-    cols = np.fromiter((iidx[m] for m in df["movieId"].to_list()), dtype=np.int32, count=df.height)
+    # `users`/`items` are sorted and contain every id in the frame, so a
+    # binary search is the exact positional index — no 32M-entry dict walk.
+    rows = np.searchsorted(users, df["userId"].to_numpy()).astype(np.int32)
+    cols = np.searchsorted(items, df["movieId"].to_numpy()).astype(np.int32)
 
     ratings = df["rating"].to_numpy().astype(np.float32)
     if signal == "liked":
@@ -101,6 +128,18 @@ def build_matrix(
     return mat, users, items
 
 
+def _use_gpu() -> bool:
+    """CUDA ALS when implicit was built with it; ENTERTAINER_CF_GPU=0/1 overrides."""
+    flag = os.environ.get("ENTERTAINER_CF_GPU", "").strip()
+    if flag in ("0", "1"):
+        return flag == "1"
+    try:
+        import implicit.gpu
+    except ImportError:
+        return False
+    return bool(implicit.gpu.HAS_CUDA)
+
+
 def fit(
     factors: int = CF_FACTORS,
     regularization: float = 0.05,
@@ -109,6 +148,7 @@ def fit(
     seed: int = 0,
     holdout_users: np.ndarray | None = None,
     signal: str = "watched",
+    ratings: pl.DataFrame | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Fit iALS. Returns (movielens_item_ids, item_factor_matrix).
 
@@ -118,13 +158,9 @@ def fit(
     ratings helped shape the item factors those strangers are scored against.
     """
     from implicit.als import AlternatingLeastSquares
+    from threadpoolctl import threadpool_limits
 
-    # implicit parallelises ALS itself; letting OpenBLAS also spawn a
-    # threadpool inside each of those workers oversubscribes every core and
-    # is markedly slower than single-threaded BLAS here.
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-
-    df = load_ratings()
+    df = load_ratings() if ratings is None else ratings
     console.print(f"[dim]MovieLens ratings: {df.height:,}[/dim]")
     if holdout_users is not None and len(holdout_users):
         before = df.height
@@ -135,6 +171,7 @@ def fit(
     console.print(f"[dim]implicit matrix: {mat.shape[0]:,} users x {mat.shape[1]:,} items, "
                   f"{mat.nnz:,} nonzeros[/dim]")
 
+    use_gpu = _use_gpu()
     model = AlternatingLeastSquares(
         factors=factors,
         regularization=regularization,
@@ -142,11 +179,20 @@ def fit(
         alpha=alpha,
         calculate_training_loss=True,
         random_state=seed,
-        use_gpu=False,
+        use_gpu=use_gpu,
     )
-    model.fit(mat)
+    console.print(f"[dim]ALS on {'GPU' if use_gpu else 'CPU'}[/dim]")
+    # implicit parallelises ALS itself; a BLAS threadpool inside each of its
+    # workers oversubscribes every core. The env var is read once at BLAS
+    # load (long before this point), so the limit has to be applied live.
+    with threadpool_limits(1, "blas"):
+        model.fit(mat)
 
-    item_factors = np.asarray(model.item_factors, dtype=np.float32)
+    raw = model.item_factors
+    # GPU models hold factors as implicit.gpu.Matrix, not ndarray.
+    if hasattr(raw, "to_numpy"):
+        raw = raw.to_numpy()
+    item_factors = np.asarray(raw, dtype=np.float32)
     return items.astype(np.int32), item_factors
 
 

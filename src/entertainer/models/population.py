@@ -94,6 +94,92 @@ def _user_weight(X: np.ndarray, y: np.ndarray, ridge: float = 1.0) -> np.ndarray
     return np.linalg.solve(gram, X.T @ (y - y.mean()))
 
 
+# Upper bound on the padded (users x ratings x d) block built per solve, in
+# float64 elements (~256 MB). Users are length-sorted before chunking, so
+# padding waste stays small even though MovieLens counts span 25..30k.
+_CHUNK_ELEMENTS = 32_000_000
+
+
+def _taste_vectors(df: pl.DataFrame, fs, item_of_movielens: dict[int, int]) -> np.ndarray:
+    """Unit taste direction per qualifying user, in ascending userId order.
+
+    Batched form of ``_user_weight``: users are grouped into chunks, their
+    zero-padded design matrices stacked, and one ``np.linalg.solve`` call
+    handles the whole chunk. Padding rows are zero in both X and the centred
+    target, so they add nothing to either side of the normal equations.
+    """
+    pairs = [(int(m), fs.index[i]) for m, i in item_of_movielens.items() if i in fs.index]
+    lookup = pl.DataFrame(
+        {"movieId": [m for m, _ in pairs], "_row": [r for _, r in pairs]},
+        schema={"movieId": pl.Int32, "_row": pl.Int64},
+    )
+    df = df.select("userId", "movieId", "rating").cast({"movieId": pl.Int32})
+    df = df.join(lookup, on="movieId", how="inner")
+
+    stats = (
+        df.group_by("userId")
+        .agg(
+            n=pl.len(),
+            liked=(pl.col("rating") >= LIKED_AT).sum(),
+            disliked=(pl.col("rating") <= DISLIKED_AT).sum(),
+        )
+        .filter(
+            (pl.col("n") >= MIN_RATINGS)
+            & (pl.col("liked") >= MIN_EACH_SIDE)
+            & (pl.col("disliked") >= MIN_EACH_SIDE)
+        )
+        .sort("n", "userId")
+    )
+    d = fs.matrix.shape[1]
+    if stats.height == 0:
+        return np.empty((0, d))
+
+    df = df.join(stats.select("userId", "n"), on="userId", how="inner").sort(
+        "n", "userId", maintain_order=True
+    )
+    rows = df["_row"].to_numpy()
+    y_all = (df["rating"].to_numpy().astype(np.float64) - 0.5) / 4.5
+    uid_all = stats["userId"].to_numpy()
+    counts = stats["n"].to_numpy().astype(np.int64)
+    starts = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+    user_of_row = np.repeat(np.arange(len(counts)), counts)
+    pos_in_user = np.arange(len(rows)) - starts[user_of_row]
+    # Centre per user, exactly as `_user_weight` does with y - y.mean().
+    means = np.add.reduceat(y_all, starts[:-1]) / counts
+    yc_all = y_all - means[user_of_row]
+
+    matrix = fs.matrix
+    ridge = np.eye(d)
+    out = np.empty((len(counts), d))
+    u = 0
+    while u < len(counts):
+        # Lengths ascend, so the last user in the chunk sets the padding.
+        v = u + 1
+        while v < len(counts) and (v + 1 - u) * counts[v] * d <= _CHUNK_ELEMENTS:
+            v += 1
+        B, L = v - u, int(counts[v - 1])
+        lo, hi = starts[u], starts[v]
+        local_user = user_of_row[lo:hi] - u
+        local_pos = pos_in_user[lo:hi]
+        X = np.zeros((B, L, d))
+        X[local_user, local_pos] = matrix[rows[lo:hi]]
+        yc = np.zeros((B, L))
+        yc[local_user, local_pos] = yc_all[lo:hi]
+        Xt = X.transpose(0, 2, 1)
+        gram = Xt @ X + ridge
+        rhs = (Xt @ yc[:, :, None])[:, :, 0]
+        out[u:v] = np.linalg.solve(gram, rhs[:, :, None])[:, :, 0]
+        u = v
+
+    norms = np.linalg.norm(out, axis=1)
+    # Direction, not magnitude: how strongly someone rates is a property of
+    # how they use a scale, not of what they like.
+    keep = norms > 1e-9
+    W = out[keep] / norms[keep, None]
+    order = np.argsort(uid_all[keep], kind="stable")
+    return W[order]
+
+
 def fit(
     fs,
     item_of_movielens: dict[int, int],
@@ -126,40 +212,18 @@ def fit(
         raise RuntimeError("no MovieLens users with enough ratings to fit a population prior")
 
     rng = np.random.default_rng(seed)
+    # group_by order is arbitrary; sort so the seeded sample is reproducible.
+    candidates = np.sort(candidates)
     if candidates.size > max_users:
         candidates = rng.choice(candidates, size=max_users, replace=False)
     df = df.filter(pl.col("userId").is_in(pl.Series(candidates.astype(np.int32)).implode()))
 
     console.print(f"[dim]fitting taste vectors for {len(candidates):,} MovieLens users[/dim]")
 
-    vectors: list[np.ndarray] = []
-    for (uid,), sub in df.group_by(["userId"]):
-        del uid
-        items = sub["movieId"].to_numpy()
-        ratings = sub["rating"].to_numpy().astype(np.float64)
-        rows, keep = [], []
-        for pos, movie in enumerate(items.tolist()):
-            item = item_of_movielens.get(int(movie))
-            if item is not None and item in fs.index:
-                rows.append(fs.index[item])
-                keep.append(pos)
-        if len(rows) < MIN_RATINGS:
-            continue
-        y = ratings[keep]
-        if (y >= LIKED_AT).sum() < MIN_EACH_SIDE or (y <= DISLIKED_AT).sum() < MIN_EACH_SIDE:
-            continue
-        X = fs.matrix[np.array(rows)]
-        w = _user_weight(X, (y - 0.5) / 4.5)
-        norm = np.linalg.norm(w)
-        if norm > 1e-9:
-            # Direction, not magnitude: how strongly someone rates is a
-            # property of how they use a scale, not of what they like.
-            vectors.append(w / norm)
+    W = _taste_vectors(df, fs, item_of_movielens)
+    if len(W) < 50:
+        raise RuntimeError(f"only {len(W)} usable taste vectors; need at least 50")
 
-    if len(vectors) < 50:
-        raise RuntimeError(f"only {len(vectors)} usable taste vectors; need at least 50")
-
-    W = np.vstack(vectors)
     mean = W.mean(axis=0)
     centred = W - mean
     cov = (centred.T @ centred) / max(len(W) - 1, 1)

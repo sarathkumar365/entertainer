@@ -6,16 +6,19 @@ a reliable ``original_language`` field — all three matter a great deal to a
 text-embedding item tower, and the language field in particular is what makes
 "recommend me a Malayalam thriller" reliable rather than approximate.
 
-The ``/find`` endpoint is used because a single call resolves an IMDb id to a
-full TMDB record, halving the request count versus find-then-detail.
+Titles whose TMDB id is already known (MovieLens links carry it) are fetched
+with one ``/movie/{id}`` call that appends keywords, which also brings the
+tagline ``/find`` lacks. Everything else goes through ``/find``, which
+resolves an IMDb id to a TMDB record in a single call.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 import httpx
@@ -45,6 +48,10 @@ def _tick(done: int, total: int, started: float, label: str) -> None:
     )
 
 
+
+# HTTP/2 multiplexes every request over one connection instead of a pool of
+# forty TLS handshakes. Optional: httpx refuses http2=True without ``h2``.
+HTTP2 = importlib.util.find_spec("h2") is not None
 
 # TMDB publishes no hard public rate limit any more but asks for restraint.
 # 40 concurrent requests sits comfortably under the point where 429s appear.
@@ -81,6 +88,9 @@ class EnrichResult:
     genres: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     found: bool = False
+    # True once TMDB has answered the keyword question, even with an empty
+    # list, so the write can stamp keywords_at and the backfill skips it.
+    keywords_fetched: bool = False
 
 
 # TMDB genre ids are a small fixed vocabulary; resolving them locally avoids a
@@ -161,6 +171,39 @@ def _parse_find(imdb_id: str, payload: dict | None) -> EnrichResult:
     return out
 
 
+def _keyword_names(payload: dict | None, kind: str | None) -> list[str]:
+    items = (payload or {}).get("keywords") if kind == "movie" else (payload or {}).get("results")
+    return [k["name"] for k in (items or []) if k.get("name")]
+
+
+def _parse_movie(imdb_id: str, tmdb_id: int, payload: dict) -> EnrichResult:
+    """Map a ``/movie/{id}?append_to_response=keywords`` payload.
+
+    Field for field the same as ``_parse_find``, so a title enriched either
+    way is indistinguishable downstream. Genres go through the id table
+    rather than the names in the payload for the same reason.
+    """
+    kw = payload.get("keywords")
+    return EnrichResult(
+        imdb_id=imdb_id,
+        tmdb_id=payload.get("id") or tmdb_id,
+        kind="movie",
+        overview=(payload.get("overview") or "").strip() or None,
+        tagline=(payload.get("tagline") or "").strip() or None,
+        original_language=payload.get("original_language"),
+        original_title=payload.get("original_title"),
+        popularity=payload.get("popularity"),
+        tmdb_rating=payload.get("vote_average"),
+        tmdb_votes=payload.get("vote_count"),
+        poster_path=payload.get("poster_path"),
+        genres=[_GENRE_IDS[g["id"]] for g in (payload.get("genres") or [])
+                if g.get("id") in _GENRE_IDS],
+        keywords=_keyword_names(kw, "movie"),
+        found=True,
+        keywords_fetched=isinstance(kw, dict),
+    )
+
+
 async def _enrich_one(
     client: httpx.AsyncClient,
     imdb_id: str,
@@ -179,51 +222,114 @@ async def _enrich_one(
         path = "movie" if res.kind == "movie" else "tv"
         kw = await _get(client, f"{TMDB_API_BASE}/{path}/{res.tmdb_id}/keywords", params, limiter)
         if kw:
-            items = kw.get("keywords") if res.kind == "movie" else kw.get("results")
-            res.keywords = [k["name"] for k in (items or []) if k.get("name")]
+            res.keywords = _keyword_names(kw, res.kind)
+            res.keywords_fetched = True
     return res
 
 
+async def _enrich_known(
+    client: httpx.AsyncClient,
+    imdb_id: str,
+    tmdb_id: int,
+    params: dict,
+    limiter: RateLimiter,
+    want_keywords: bool,
+) -> EnrichResult:
+    payload = await _get(
+        client,
+        f"{TMDB_API_BASE}/movie/{tmdb_id}",
+        {**params, "append_to_response": "keywords"},
+        limiter,
+    )
+    if payload and payload.get("imdb_id") in (None, "", imdb_id):
+        return _parse_movie(imdb_id, tmdb_id, payload)
+    # MovieLens links go stale: TMDB merges and deletes ids, and the odd link
+    # points at a different film. The IMDb id is the more durable key, so a
+    # dead or mismatched link falls back to resolving it.
+    return await _enrich_one(client, imdb_id, params, limiter, want_keywords)
+
+
+async def _run_pool(
+    items: Sequence,
+    concurrency: int,
+    fetch: Callable[[object], Awaitable[object]],
+    handle: Callable[[object, object], None],
+) -> None:
+    """Run ``fetch`` over ``items`` with exactly ``concurrency`` workers.
+
+    Workers pull from one shared iterator, so a slow request holds up only
+    its own worker rather than a whole lock-step batch, and only
+    ``concurrency`` coroutines exist however long the input is. ``handle``
+    runs on the event loop as each result lands.
+    """
+    source = iter(items)
+
+    async def worker() -> None:
+        for item in source:
+            handle(item, await fetch(item))
+
+    async with asyncio.TaskGroup() as group:
+        for _ in range(min(concurrency, len(items))):
+            group.create_task(worker())
+
+
+def _progress(label: str) -> Progress:
+    return Progress(
+        TextColumn(f"[bold blue]{label}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+    )
+
+
+def _client(headers: dict, concurrency: int) -> httpx.AsyncClient:
+    limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency)
+    return httpx.AsyncClient(headers=headers, limits=limits, http2=HTTP2)
+
+
 async def enrich_async(
-    imdb_ids: Sequence[str],
+    items: Sequence[str | tuple[str, int | None]],
     concurrency: int = DEFAULT_CONCURRENCY,
     keywords: bool = True,
     on_batch=None,
     batch_size: int = 500,
 ) -> list[EnrichResult]:
+    """Enrich titles, each an IMDb id or an (imdb_id, tmdb_id) pair.
+
+    A known tmdb_id is taken to be a movie id: the only source that sets one
+    before enrichment is MovieLens, which is movies only. Results arrive in
+    completion order, not input order.
+    """
     concurrency = max(1, int(concurrency))
     headers, params = _auth()
     limiter = RateLimiter(per_second=concurrency)
     results: list[EnrichResult] = []
     pending: list[EnrichResult] = []
 
-    limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency)
-    async with httpx.AsyncClient(headers=headers, limits=limits, http2=False) as client:
+    async with _client(headers, concurrency) as client:
 
-        with Progress(
-            TextColumn("[bold blue]TMDB enrich"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-        ) as bar:
-            task = bar.add_task("enrich", total=len(imdb_ids))
+        async def fetch(item) -> EnrichResult:
+            imdb_id, tmdb_id = (item, None) if isinstance(item, str) else item
+            if tmdb_id:
+                return await _enrich_known(client, imdb_id, int(tmdb_id), params, limiter, keywords)
+            return await _enrich_one(client, imdb_id, params, limiter, keywords)
+
+        with _progress("TMDB enrich") as bar:
+            task = bar.add_task("enrich", total=len(items))
             started = time.monotonic()
-            # Keep at most ``concurrency`` tasks alive. A semaphore alone only
-            # limits active requests; creating 270k waiting Task objects first
-            # can exhaust memory before the first response arrives.
-            for start in range(0, len(imdb_ids), concurrency):
-                batch = imdb_ids[start : start + concurrency]
-                for res in await asyncio.gather(
-                    *(_enrich_one(client, iid, params, limiter, keywords) for iid in batch)
-                ):
-                    results.append(res)
-                    pending.append(res)
-                    bar.advance(task)
-                    _tick(len(results), len(imdb_ids), started, "enrich")
-                    if on_batch and len(pending) >= batch_size:
-                        on_batch(pending)
-                        pending = []
+
+            def handle(_item, res: EnrichResult) -> None:
+                nonlocal pending
+                results.append(res)
+                pending.append(res)
+                bar.advance(task)
+                _tick(len(results), len(items), started, "enrich")
+                if on_batch and len(pending) >= batch_size:
+                    batch, pending = pending, []
+                    on_batch(batch)
+
+            await _run_pool(items, concurrency, fetch, handle)
             if on_batch and pending:
                 on_batch(pending)
     return results
@@ -242,10 +348,7 @@ async def _keywords_only(
 ) -> tuple[int, list[str]]:
     path = "movie" if kind == "movie" else "tv"
     payload = await _get(client, f"{TMDB_API_BASE}/{path}/{tmdb_id}/keywords", params, limiter)
-    if not payload:
-        return tmdb_id, []
-    items = payload.get("keywords") if kind == "movie" else payload.get("results")
-    return tmdb_id, [k["name"] for k in (items or []) if k.get("name")]
+    return tmdb_id, _keyword_names(payload, kind)
 
 
 async def backfill_keywords_async(
@@ -268,31 +371,27 @@ async def backfill_keywords_async(
     pending: list[tuple[int, list[str]]] = []
     done = 0
 
-    limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency)
-    async with httpx.AsyncClient(headers=headers, limits=limits) as client:
+    async with _client(headers, concurrency) as client:
 
-        with Progress(
-            TextColumn("[bold blue]TMDB keywords"),
-            BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-        ) as bar:
+        async def fetch(target) -> tuple[int, list[str]]:
+            _, tmdb_id, kind = target
+            return await _keywords_only(client, tmdb_id, kind, params, limiter)
+
+        with _progress("TMDB keywords") as bar:
             task = bar.add_task("kw", total=len(targets))
             started = time.monotonic()
-            for start in range(0, len(targets), concurrency):
-                batch = targets[start : start + concurrency]
-                resolved = await asyncio.gather(
-                    *(_keywords_only(client, tmdb_id, kind, params, limiter) for _, tmdb_id, kind in batch)
-                )
-                for (item_id, _, _), (_tmdb_id, keywords) in zip(batch, resolved, strict=True):
-                    pending.append((item_id, keywords))
-                    done += 1
-                    bar.advance(task)
-                    _tick(done, len(targets), started, "keywords")
-                    if on_batch and len(pending) >= batch_size:
-                        on_batch(pending)
-                        pending = []
+
+            def handle(target, resolved) -> None:
+                nonlocal pending, done
+                pending.append((target[0], resolved[1]))
+                done += 1
+                bar.advance(task)
+                _tick(done, len(targets), started, "keywords")
+                if on_batch and len(pending) >= batch_size:
+                    batch, pending = pending, []
+                    on_batch(batch)
+
+            await _run_pool(targets, concurrency, fetch, handle)
             if on_batch and pending:
                 on_batch(pending)
     return done

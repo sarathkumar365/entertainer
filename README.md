@@ -264,7 +264,24 @@ cp .env.example .env     # then paste your free TMDB key
 ent setup                # download, build, enrich, embed, factorise, fuse
 ```
 
-`setup` is resumable — every stage skips work already done.
+`setup` is resumable — every stage skips work already done. The catalogue
+and the MovieLens factorisation are skipped outright when their inputs are
+unchanged since they last succeeded (`--force` rebuilds them anyway), TMDB
+only fetches titles it has never seen, and the encoder only encodes cards
+whose text changed. The factorisation runs in a background process
+alongside the TMDB and encoding stages; `--no-parallel` runs it in line.
+
+Memory is planned as a share of physical RAM — half by default, set with
+`--memory-fraction 0.3` or `ENTERTAINER_MEMORY_FRACTION`. DuckDB is capped
+at that share; the background factorisation only starts when it and the
+encoder fit inside it together, so an 8 GB laptop runs the stages one after
+another while a larger server overlaps them.
+
+On a Linux machine with an NVIDIA GPU, `uv pip install -e ".[encode,web,gpu]"`
+takes torch from PyTorch's CUDA 12.8 index (driver 570 or newer). The encoder
+then runs in bf16 with a batch size sized to free VRAM; `ENTERTAINER_DEVICE`
+overrides the device choice and `ENTERTAINER_CF_GPU=0` keeps the
+factorisation on the CPU.
 
 ---
 
