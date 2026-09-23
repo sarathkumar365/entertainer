@@ -89,3 +89,66 @@ def coverage_is_stale(coverage: dict[str, int]) -> float | None:
         return None
     share = coverage["fused"] / coverage["catalog"]
     return share if share < STALE_COVERAGE else None
+
+
+#: The eight stages of a full build, in dependency order, with the label the
+#: Reporter records them under.
+STAGES = (
+    ("sources", "downloading source data"),
+    ("catalogue", "building catalogue"),
+    ("tmdb", "enriching from TMDB"),
+    ("prune", "pruning by language"),
+    ("embeddings", "encoding item text"),
+    ("cf", "factorising MovieLens"),
+    ("fusion", "fusing item space"),
+    ("prior", "learning the population prior"),
+)
+
+
+@dataclass
+class BuildSettings:
+    """Every knob a full build turns.
+
+    These were literals scattered through the `ent setup` command body, which
+    made them invisible: nothing said that the fused space is 192-dimensional
+    because the collaborative factorisation produces 192 factors, or that the
+    keyword pass targets the top 150,000 titles by vote count rather than a
+    batch size. Naming them together is the point — several have to agree
+    with each other.
+    """
+
+    skip_enrich: bool = False
+    enrich_limit: int = 0
+    min_votes: int = 50
+    floor_scale: float = 1.0
+
+    #: TMDB allows a lot of concurrency; this is the rate the API tolerates
+    #: rather than anything about this machine.
+    concurrency: int = 40
+    #: A coverage target, not a batch size: the most-voted N titles get
+    #: keywords, and the pass stops when they have them.
+    keyword_target: int = 150_000
+
+    encode_batch: int = 64
+
+    #: Must match `fusion_dim`. The fused space is a rotation of the
+    #: collaborative and content blocks, so asking for more fused dimensions
+    #: than there are factors would pad it with noise.
+    cf_factors: int = 192
+    cf_iterations: int = 20
+    #: Users withheld from the factorisation and reserved for the offline
+    #: benchmark. See evaluation.integrity.
+    cf_holdout: int = 2_000
+    cf_signal: str = "watched"
+
+    fusion_dim: int = 192
+
+    prior_max_users: int = 20_000
+    prior_shrinkage: float = 0.15
+
+    def __post_init__(self) -> None:
+        if self.fusion_dim > self.cf_factors:
+            raise ValueError(
+                f"fusion_dim ({self.fusion_dim}) exceeds cf_factors ({self.cf_factors}); "
+                "the extra dimensions would be noise"
+            )
