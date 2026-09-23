@@ -1,5 +1,73 @@
 # The story of how Entertainer learns your taste
 
+## Before you start — the short version
+
+If you have run full-stack web apps before, you already know most of this.
+
+**There is no model server.** Nothing like Ollama or a ChatGPT-style process
+sits in the background. There are two "models", and neither needs to stay
+running:
+
+1. **The embedding model (Qwen3-Embedding-0.6B).** It reads each film's plot
+   and turns it into a list of numbers. It runs once, during the build, and
+   the results are saved to disk. Afterwards it only wakes up briefly for
+   extras such as adding a brand-new title or searching by mood.
+2. **Your taste model.** This is a small piece of maths fitted to your
+   ratings. It is recalculated from scratch, in milliseconds, every time you
+   ask for recommendations.
+
+So "starting the app" just means starting an ordinary web server — a Python
+backend and a React frontend. The database is a single DuckDB file
+(`data/entertainer.duckdb`), like SQLite, so there is no database server to
+start either.
+
+| Piece | Full-stack equivalent |
+|---|---|
+| `ent` | the project CLI, like `rails` or `artisan` |
+| App, `http://127.0.0.1:8756` | the website: rate titles, get recommendations |
+| Build Studio, `http://127.0.0.1:8757` | a read-only progress page, like a CI dashboard |
+| `ent setup` (the build) | seeding and migrating a very large database — hours, but resumable |
+
+The build must finish before the app can run. While it is running, it holds
+the database exclusively, so starting the app fails with a DuckDB lock error.
+That is expected.
+
+### What the eight build steps actually do
+
+1. **Downloading source data.** Fetches IMDb's public film lists (every
+   title, its rating, cast and crew) and MovieLens (32 million ratings from
+   real people). Think of it as downloading a huge seed dump.
+2. **Building the catalogue.** Merges those files into one table of films and
+   shows, dropping titles almost nobody has voted on.
+3. **Enriching from TMDB.** Asks TMDB, one title at a time, for the plot
+   summary, keywords, poster and original language — things IMDb does not
+   have. The plot matters most, because it is where the model learns what a
+   film *feels* like. This is the slowest step: one network call per title,
+   which can mean a few hours.
+4. **Pruning by language.** Now that each title's real language is known,
+   drops the ones that are too obscure *for their own industry*. The bar is
+   fair per language: 200 votes is popular for a Malayalam film, but not for
+   a Hollywood one.
+5. **Encoding the text.** The AI model finally runs. It downloads once
+   (about 1.2 GB), then reads every plot and writes each title as 256
+   numbers. Films with a similar feel end up with similar numbers — mood,
+   not genre. Slow without an NVIDIA GPU, so expect hours on a laptop.
+6. **Factorising MovieLens.** Mines the 32 million ratings for "people who
+   liked X also liked Y" patterns that no plot summary states. Plain maths,
+   no AI model. Minutes.
+7. **Fusing the item space.** Combines the "feel from the plot" numbers and
+   the "people like me" numbers into one map. Every title gets a position;
+   titles close together are ones you would probably feel the same about.
+8. **Learning the population prior.** Learns what typical human taste looks
+   like, so that with only a handful of your ratings the model makes
+   sensible guesses rather than random ones.
+
+When it prints `ready`, run `./scripts/entertainer start`. From then on,
+your taste is simply your ratings measured against that map, recalculated
+instantly on every request. Nothing heavy runs while you use the app.
+
+The rest of this document tells the same story in depth.
+
 Imagine the feature we want to build is simple to describe:
 
 > “I tell the app what I liked. It should help me choose what to watch next, explain how confident it is, and eventually prove whether it is helping.”
