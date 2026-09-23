@@ -79,8 +79,13 @@ def client(tmp_path, monkeypatch):
 def test_index_serves(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert "function escapeHtml" in r.text
-    assert "function posterUrl" in r.text
+    # These used to assert the served HTML contained "function escapeHtml"
+    # and "function posterUrl" — the implementation of a page the React
+    # rewrite deletes. What they stood for is now asserted against the layer
+    # that survives a frontend rewrite: see
+    # test_static_assets_referenced_by_the_page_actually_resolve and
+    # test_posters_are_absolute_tmdb_urls below.
+    assert r.headers["content-type"].startswith("text/html")
     assert "entertainer" in r.text
 
 
@@ -431,7 +436,7 @@ def test_search_does_not_list_a_catalogue_title_twice(client, monkeypatch):
     """The dedupe compared against a key _present never emitted, so the set
     was {None} and every catalogue title TMDB also knew appeared twice."""
     from entertainer import store
-    from entertainer.web import app as webapp
+    from entertainer.web.routers import catalogue as catalogue_router
 
     with store.session() as con:
         row = con.execute(
@@ -440,7 +445,7 @@ def test_search_does_not_list_a_catalogue_title_twice(client, monkeypatch):
     assert row, "fixture titles need a tmdb_id for this test to mean anything"
     item_id, title, tmdb_id = row
 
-    monkeypatch.setattr(webapp, "has_tmdb", lambda: True)
+    monkeypatch.setattr(catalogue_router, "has_tmdb", lambda: True)
     from entertainer.data import tmdb as tmdb_module
 
     monkeypatch.setattr(
@@ -453,3 +458,34 @@ def test_search_does_not_list_a_catalogue_title_twice(client, monkeypatch):
     body = client.get(f"/api/search?q={title}").json()
     assert any(c["item_id"] == item_id for c in body["catalogue"])
     assert body["tmdb"] == [], "the catalogue already has this title"
+
+
+def test_several_apps_coexist_with_different_settings(client):
+    """State hangs off app.state, not module globals. The token tests already
+    build a second app beside the fixture's; this pins why that works."""
+    from entertainer.web import app as webapp
+
+    catalogue = webapp.create_app(live=False)
+    live = webapp.create_app(live=True)
+    assert catalogue.state.ctx.use_live is False
+    assert live.state.ctx.use_live is True
+    assert catalogue.state.ctx.engine is not live.state.ctx.engine
+
+
+def test_static_assets_referenced_by_the_page_actually_resolve(client):
+    """Replaces the old assertion that the HTML contained two specific JS
+    function names. The real failure mode of a frontend rewrite is the page
+    pointing at a bundle the build renamed."""
+    import re
+
+    html = client.get("/").text
+    refs = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    for ref in refs:
+        assert client.get(ref).status_code == 200, ref
+
+
+def test_posters_are_absolute_tmdb_urls(client):
+    """The renderer must not have to know how to build a poster URL."""
+    items = client.get("/api/feed?years=4&limit=5").json()["items"]
+    assert items
+    assert all(i["poster"].startswith("https://image.tmdb.org/t/p/") for i in items)
