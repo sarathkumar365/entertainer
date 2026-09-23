@@ -1461,16 +1461,7 @@ def netflix_import(
     if not ratings:
         _fail("no rating items found in those files")
 
-    # Netflix pages overlap when they are grabbed by hand. Later pages are
-    # older, so the first occurrence of a title is the most recent verdict.
-    seen: set[tuple[str, int | None]] = set()
-    unique: list[netflix.Rating] = []
-    for rating in ratings:
-        key = (netflix.normalise(rating.title), rating.netflix_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(rating)
+    unique = netflix.dedupe(ratings)
     if len(unique) != len(ratings):
         console.print(f"[dim]{len(ratings) - len(unique)} duplicate rows dropped[/dim]")
 
@@ -1481,9 +1472,7 @@ def netflix_import(
             resolutions, json.loads(decisions.read_text(encoding="utf-8"))
         )
 
-    buckets: dict[str, list[netflix.Resolution]] = {}
-    for res in resolutions:
-        buckets.setdefault(res.confidence, []).append(res)
+    buckets = netflix.bucket(resolutions)
 
     table = Table(title="Netflix import")
     table.add_column("confidence")
@@ -1503,24 +1492,7 @@ def netflix_import(
     needs_eyes = [r for r in resolutions if r.confidence not in ("high", "skipped")]
     if needs_eyes:
         review.write_text(
-            json.dumps(
-                [
-                    {
-                        "title": r.rating.title,
-                        "thumbs": r.rating.thumbs,
-                        "verdict": r.rating.verdict,
-                        "netflix_id": r.rating.netflix_id,
-                        "rated_on": str(r.rating.rated_on) if r.rating.rated_on else None,
-                        "confidence": r.confidence,
-                        "reason": r.reason,
-                        "best_guess": r.match,
-                        "alternatives": r.alternatives,
-                    }
-                    for r in needs_eyes
-                ],
-                indent=2,
-                ensure_ascii=False,
-            ),
+            json.dumps(netflix.review_payload(needs_eyes), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         console.print(f"[yellow]{len(needs_eyes)} need a human -> {review}[/yellow]")
@@ -1539,15 +1511,8 @@ def netflix_import(
         return
 
     if replace:
-        # Re-running after settling the ambiguous titles would otherwise stack
-        # a second verdict on every title the first pass already wrote. The
-        # latest verdict wins, so nothing breaks, but the duplicates distort
-        # the prequential replay, which walks the log in order.
         with store.session() as con:
-            cleared = con.execute(
-                "SELECT count(*) FROM events WHERE source = 'netflix'"
-            ).fetchone()[0]
-            con.execute("DELETE FROM events WHERE source = 'netflix'")
+            cleared = netflix.clear_previous(con)
         console.print(f"[dim]cleared {cleared} previously imported Netflix verdicts[/dim]")
 
     engine = Engine()

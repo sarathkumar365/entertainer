@@ -280,3 +280,72 @@ def test_an_unrecognised_ruling_is_an_error_not_a_silent_skip(fake_search):
     resolved = netflix.resolve([netflix.Rating("X", "THUMBS_UP", 5, date(2025, 1, 1))])
     with pytest.raises(ValueError):
         netflix.apply_decisions(resolved, {"5": "maybe"})
+
+
+# --- the import mechanics, lifted out of the CLI ----------------------------
+
+
+def rating(title, netflix_id=None, thumbs="THUMBS_UP", rated_on=None):
+    from datetime import date
+
+    return netflix.Rating(
+        title=title,
+        thumbs=thumbs,
+        netflix_id=netflix_id,
+        rated_on=date.fromisoformat(rated_on) if rated_on else None,
+    )
+
+
+def test_dedupe_keeps_the_first_occurrence_because_later_pages_are_older():
+    """Pages are grabbed by hand and overlap. The first occurrence of a title
+    is the most recent verdict, so it is the one that must survive."""
+    rows = [
+        rating("Drishyam", 100, "THUMBS_WAY_UP"),
+        rating("Drishyam", 100, "THUMBS_DOWN"),
+    ]
+    kept = netflix.dedupe(rows)
+    assert len(kept) == 1
+    assert kept[0].verdict == "love"
+
+
+def test_dedupe_keys_on_the_netflix_id_as_well_as_the_title():
+    """One title can be exported under more than one id, and two different
+    titles can normalise alike."""
+    rows = [rating("Hunger", 100), rating("Hunger", 200)]
+    assert len(netflix.dedupe(rows)) == 2
+
+
+def test_dedupe_normalises_before_comparing():
+    rows = [rating("The Pope's Exorcist", 5), rating("the popes exorcist", 5)]
+    assert len(netflix.dedupe(rows)) == 1
+
+
+def test_dedupe_preserves_order():
+    rows = [rating("A", 1), rating("B", 2), rating("A", 1), rating("C", 3)]
+    assert [r.title for r in netflix.dedupe(rows)] == ["A", "B", "C"]
+
+
+def test_review_payload_carries_the_netflix_id_so_rulings_can_be_replayed():
+    """The decisions file is keyed on it. Without the id a ruling has to be
+    retyped on every re-import of the same export."""
+    res = netflix.Resolution(
+        rating=rating("Hunger", 4242, rated_on="2024-03-01"),
+        confidence="ambiguous",
+        reason="several films share the title",
+        match=None,
+        alternatives=[{"tmdb_id": 1, "title": "Hunger"}],
+    )
+    payload = netflix.review_payload([res])[0]
+    assert payload["netflix_id"] == 4242
+    assert payload["rated_on"] == "2024-03-01"
+    assert payload["confidence"] == "ambiguous"
+    assert payload["alternatives"]
+
+
+def test_bucket_groups_by_confidence():
+    high = netflix.Resolution(rating=rating("A", 1), confidence="high", reason="", match={}, alternatives=[])
+    low = netflix.Resolution(rating=rating("B", 2), confidence="low", reason="", match=None, alternatives=[])
+    grouped = netflix.bucket([high, low, high])
+    assert len(grouped["high"]) == 2
+    assert len(grouped["low"]) == 1
+    assert "ambiguous" not in grouped

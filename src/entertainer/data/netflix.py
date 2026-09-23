@@ -297,3 +297,67 @@ def apply_decisions(
             continue
         raise ValueError(f"unrecognised ruling for {res.rating.netflix_id}: {ruling!r}")
     return resolutions
+
+
+def dedupe(ratings: list[Rating]) -> list[Rating]:
+    """Drop repeats, keeping the most recent verdict for each title.
+
+    Netflix pages overlap when they are grabbed by hand, and later pages hold
+    older verdicts, so the first occurrence of a title is the most recent
+    opinion. Keyed on the normalised title *and* the Netflix id, because two
+    genuinely different titles can normalise alike and a single title can be
+    exported under more than one id.
+    """
+    seen: set[tuple[str, int | None]] = set()
+    unique: list[Rating] = []
+    for rating in ratings:
+        key = (normalise(rating.title), rating.netflix_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(rating)
+    return unique
+
+
+def review_payload(resolutions: list[Resolution]) -> list[dict]:
+    """What a human needs in order to settle an ambiguous title.
+
+    The Netflix id is carried through because the decisions file is keyed on
+    it: rulings recorded once then apply to every later re-import of the same
+    export, rather than being retyped.
+    """
+    return [
+        {
+            "title": r.rating.title,
+            "thumbs": r.rating.thumbs,
+            "verdict": r.rating.verdict,
+            "netflix_id": r.rating.netflix_id,
+            "rated_on": str(r.rating.rated_on) if r.rating.rated_on else None,
+            "confidence": r.confidence,
+            "reason": r.reason,
+            "best_guess": r.match,
+            "alternatives": r.alternatives,
+        }
+        for r in resolutions
+    ]
+
+
+def bucket(resolutions: list[Resolution]) -> dict[str, list[Resolution]]:
+    """Group resolutions by confidence."""
+    out: dict[str, list[Resolution]] = {}
+    for resolution in resolutions:
+        out.setdefault(resolution.confidence, []).append(resolution)
+    return out
+
+
+def clear_previous(con) -> int:
+    """Remove verdicts from an earlier Netflix import.
+
+    Re-running after settling the ambiguous titles would otherwise stack a
+    second verdict on every title the first pass already wrote. The latest
+    verdict wins so nothing breaks, but the duplicates distort the
+    prequential replay, which walks the log in order.
+    """
+    cleared = con.execute("SELECT count(*) FROM events WHERE source = 'netflix'").fetchone()[0]
+    con.execute("DELETE FROM events WHERE source = 'netflix'")
+    return int(cleared)
