@@ -7,6 +7,7 @@ catalogue, so nothing here touches the network or the real event log.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import numpy as np
 import pytest
@@ -612,7 +613,10 @@ def test_the_token_gate_still_covers_static_assets(client):
     from entertainer.web import app as webapp
 
     guarded = TestClient(webapp.create_app(token="s3cret", live=False))
-    assert guarded.get("/static/assets/index.js").status_code == 401
+    # Derived from the page rather than hardcoded: the bundle filename
+    # carries a content hash and changes on every build.
+    asset = re.findall(r'(?:src|href)="(/static/[^"]+)"', client.get("/").text)[0]
+    assert guarded.get(asset).status_code == 401
     assert guarded.get("/").status_code == 401
 
 

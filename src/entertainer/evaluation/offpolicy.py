@@ -51,19 +51,52 @@ class OffPolicy:
 def estimate(con, engine, fs) -> OffPolicy:
     """Join logged impressions to the verdicts that followed them.
 
-    The join is temporal — a rating counts if it came *after* the impression
-    — because an event carries no slate id today. Only impressions with a
-    positive propensity are usable: a zero would divide by zero, and a
-    missing one means the slate predates propensity logging.
+    Only impressions with a positive propensity are usable: a zero would
+    divide by zero, and a missing one means the slate predates propensity
+    logging.
     """
-    rows = con.execute(
+    # Two joins, and the exact one wins where it applies.
+    #
+    # A verdict given on a recommendation now records which slate it came
+    # from, so it can be matched to that slate and no other. Verdicts
+    # predating that, or given anywhere else, fall back to the temporal join:
+    # any rating of the item after the impression. That fallback is loose —
+    # it credits a slate the user may never have looked at — so it is only
+    # used for impressions no stamped verdict claims.
+    exact = con.execute(
         """
         SELECT i.item_id, i.propensity, e.value / 10.0 AS reward
         FROM impressions i
-        JOIN events e ON e.item_id = i.item_id
-        WHERE e.kind = 'rate' AND e.value IS NOT NULL AND e.ts >= i.ts
+        JOIN events e
+          ON e.item_id = i.item_id
+         AND json_extract_string(e.context, '$.slate_id') = i.slate_id
+        WHERE e.kind = 'rate' AND e.value IS NOT NULL
         """
     ).fetchall()
+    claimed = {slate for (slate,) in con.execute(
+        """
+        SELECT DISTINCT i.slate_id
+        FROM impressions i
+        JOIN events e
+          ON e.item_id = i.item_id
+         AND json_extract_string(e.context, '$.slate_id') = i.slate_id
+        WHERE e.kind = 'rate'
+        """
+    ).fetchall()}
+    loose = con.execute(
+        """
+        SELECT i.item_id, i.propensity, e.value / 10.0 AS reward, i.slate_id
+        FROM impressions i
+        JOIN events e ON e.item_id = i.item_id
+        WHERE e.kind = 'rate' AND e.value IS NOT NULL AND e.ts >= i.ts
+          AND json_extract_string(e.context, '$.slate_id') IS NULL
+        """
+    ).fetchall()
+    rows = list(exact) + [
+        (item_id, propensity, reward)
+        for item_id, propensity, reward, slate_id in loose
+        if slate_id not in claimed
+    ]
 
     usable = [(float(reward), float(p), 0.0) for _, p, reward in rows if p and p > 0]
     item_ids = [int(item_id) for item_id, p, _ in rows if p and p > 0]
@@ -71,7 +104,10 @@ def estimate(con, engine, fs) -> OffPolicy:
     if len(usable) < MIN_LOGGED:
         return OffPolicy(status="not-enough-data", n_usable=len(usable))
 
-    model = engine.model(con)
+    # save=False: this is a measurement, not a fit worth keeping. engine.model
+    # defaults to refit=True, which persists taste.npz — so reading the audit
+    # over HTTP rewrote the stored model on every page view.
+    model = engine.fit(con, save=False)
     if model is None:
         return OffPolicy(status="no-model", n_usable=len(usable))
 

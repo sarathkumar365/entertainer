@@ -88,3 +88,73 @@ def test_a_rating_that_predates_its_impression_does_not_count(ready):
     with store.session(read_only=True) as con:
         result = offpolicy.estimate(con, engine, fs)
     assert result.n_usable == 0
+
+
+def test_a_stamped_verdict_is_matched_to_its_own_slate(ready):
+    """A verdict from a recommendation records which slate produced it, so it
+    can be matched exactly rather than by "came afterwards"."""
+    engine, fs = ready
+    ids = [int(i) for i in fs.item_ids[:3]]
+    with store.session() as con:
+        slate_id = store.new_slate_id()
+        store.log_impressions(
+            con, slate_id,
+            [(i, n, 1.0, 0.2, False) for n, i in enumerate(ids)],
+            policy="test",
+        )
+        for item_id in ids:
+            engine.record(con, item_id, "like", source="web", context={"slate_id": slate_id})
+
+    with store.session(read_only=True) as con:
+        assert offpolicy.estimate(con, engine, fs).n_usable == 3
+
+
+def test_a_stamped_verdict_is_not_credited_to_a_slate_it_did_not_come_from(ready):
+    """Browsing to the recommendations tab logs a slate whether or not anyone
+    acts on it. Without this, a verdict given elsewhere is credited to every
+    earlier impression of that title."""
+    engine, fs = ready
+    item_id = int(fs.item_ids[0])
+    with store.session() as con:
+        seen_slate = store.new_slate_id()
+        store.log_impressions(con, seen_slate, [(item_id, 0, 1.0, 0.2, False)], policy="test")
+        ignored_slate = store.new_slate_id()
+        store.log_impressions(con, ignored_slate, [(item_id, 0, 1.0, 0.9, False)], policy="test")
+        engine.record(con, item_id, "love", source="web", context={"slate_id": seen_slate})
+
+    with store.session(read_only=True) as con:
+        result = offpolicy.estimate(con, engine, fs)
+    assert result.n_usable == 1, "the unanswered slate was credited too"
+
+
+def test_unstamped_verdicts_still_fall_back_to_the_temporal_join(ready):
+    """Every verdict recorded before slate stamping existed, and every one
+    given from the terminal, has no slate id. Those must still count."""
+    engine, fs = ready
+    ids = [int(i) for i in fs.item_ids[:4]]
+    with store.session() as con:
+        store.log_impressions(
+            con, store.new_slate_id(),
+            [(i, n, 1.0, 0.25, False) for n, i in enumerate(ids)],
+            policy="test",
+        )
+    with store.session() as con:
+        for item_id in ids:
+            engine.record(con, item_id, "like", source="manual")
+
+    with store.session(read_only=True) as con:
+        assert offpolicy.estimate(con, engine, fs).n_usable == 4
+
+
+def test_estimating_does_not_persist_a_model(ready):
+    """engine.model defaults to refit=True, which saves — so reading the
+    audit over HTTP rewrote the stored taste model on every page view."""
+    from entertainer.config import PATHS
+
+    engine, fs = ready
+    saved = PATHS.artifacts / "taste.npz"
+    if saved.exists():
+        saved.unlink()
+    with store.session(read_only=True) as con:
+        offpolicy.estimate(con, engine, fs)
+    assert not saved.exists(), "a measurement persisted a model"

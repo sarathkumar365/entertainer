@@ -14,6 +14,10 @@ Regenerate deliberately with:
 
     ENTERTAINER_REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/test_cli_golden.py
 
+That run fails on purpose once it has rewritten the files, so the variable
+cannot be left set in a shell or a CI job and quietly turn this suite into a
+no-op.
+
 Two rules make the capture stable:
 
 * COLUMNS is pinned. Console() takes no width, so rich reads the environment
@@ -93,7 +97,11 @@ def test_output_is_unchanged(app_env, name, argv, stdin, n_seed):  # noqa: F811
     path = GOLDEN / f"{name}.txt"
     if REGEN:
         path.write_text(actual, encoding="utf-8")
-        pytest.skip(f"regenerated {path.name}")
+        # Failed, not skipped. A skip is a pass to every CI gate, so leaving
+        # the variable exported would rewrite all twelve captures to whatever
+        # the code currently prints and still report green — which is exactly
+        # the outcome these exist to prevent.
+        pytest.fail(f"regenerated {path.name}; unset ENTERTAINER_REGEN_GOLDEN to verify")
 
     assert path.exists(), f"missing golden {path.name}; regenerate deliberately"
     assert actual == path.read_text(encoding="utf-8")

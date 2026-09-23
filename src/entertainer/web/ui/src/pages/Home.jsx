@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
@@ -15,14 +14,28 @@ import { useAsync } from "../useAsync";
 export default function Home() {
   const { data: progress } = useAsync(() => api.progress(), []);
   const { data: mode } = useAsync(() => api.mode(), []);
-  const [pulse] = useState(0);
 
   const verdicts = progress?.rated ?? 0;
+  // Derived rather than measured. The audit endpoint reports real interval
+  // calibration, but it refits once per verdict and takes seconds — too much
+  // for a landing screen. This stands in for it, and the Evidence tab is
+  // where the actual number lives.
   const confidence = Math.min(0.95, 0.25 + verdicts / 400);
+
+  // The reaching lines are the last few verdicts, and the lit ends are the
+  // ones you liked. Not decoration: with an empty log there is nothing
+  // reaching, which is the truthful picture of a model that knows nothing.
+  const recent = progress?.recent ?? [];
+  const enjoyed = recent.filter((r) => r.verdict === "love" || r.verdict === "like").length;
 
   return (
     <div className="home">
-      <Organism verdicts={verdicts} confidence={confidence} reaching={6} rated={2} pulseKey={pulse} />
+      <Organism
+        verdicts={verdicts}
+        confidence={confidence}
+        reaching={recent.length}
+        rated={enjoyed}
+      />
 
       <div className="home-hud">
         <div className="home-corner home-tl">

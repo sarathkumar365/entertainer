@@ -11,6 +11,15 @@ from ...models.taste import to_display_scale
 from ..context import AppContext, get_context
 from ..present import present
 
+
+def _band(std: float) -> float:
+    """The +/- half-width, on the same 0-10 scale and always a real number."""
+    value = float(std)
+    if value != value:  # NaN
+        return 10.0
+    return min(max(value, 0.0) * 10.0, 10.0)
+
+
 router = APIRouter()
 
 
@@ -58,7 +67,10 @@ def recommendation_slate(k: int = 10, ctx: AppContext = Depends(get_context)) ->
                 # inside what you love, and a bar drawn past its own axis
                 # reads as a bug.
                 "score": to_display_scale(r.mean),
-                "std": min(float(r.std) * 10.0, 10.0),
+                # A pick outside the shortlist carries std=NaN, and Python's
+                # json emits a bare NaN token that JSON.parse rejects — one
+                # such item would blank the whole slate rather than one card.
+                "std": _band(r.std),
                 "propensity": r.propensity,
                 "explored": r.explored,
                 "reasons": r.reasons,

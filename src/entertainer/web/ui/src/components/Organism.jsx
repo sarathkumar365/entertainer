@@ -7,10 +7,14 @@ import { useEffect, useRef } from "react";
  *
  *   radius     <- verdicts absorbed
  *   wobble     <- 1 - confidence; a model that is guessing visibly wavers
- *   lit nodes  <- the heaviest latent axes
  *   ripple     <- a verdict landing
- *   field      <- catalogue titles, brighter the closer they sit to you
- *   reaching   <- live recommendations, retracting when one is answered
+ *   reaching   <- how many titles are in play; `rated` of them answered
+ *
+ * Two things are ambient rather than bound, and should not be read as data:
+ * the scattered field, which is texture at catalogue scale, and which
+ * internal nodes light up, which is a fixed random weighting rather than the
+ * actual heaviest axes. Wiring those would mean shipping the item space and
+ * the weight vector to the browser for a background animation.
  *
  * Canvas rather than SVG because the field is a few hundred points redrawn
  * every frame, and because the membrane is a path recomputed each tick from

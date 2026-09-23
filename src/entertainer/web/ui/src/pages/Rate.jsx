@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { VERDICTS, api } from "../api";
 import TitleCard from "../components/TitleCard";
@@ -13,6 +13,14 @@ import { useAsync } from "../useAsync";
  */
 const KEYS = { l: "love", i: "like", o: "ok", m: "meh", d: "dislike", h: "hate", n: "unseen" };
 
+/**
+ * Live-mode titles are not in the catalogue and have no item_id, so both the
+ * "already answered" and "in flight" maps key on whichever identifier the
+ * item actually has. Declared at module scope: referencing it from the
+ * filter above its own `const` would be a temporal-dead-zone error.
+ */
+const keyOf = (item) => item.item_id ?? `tmdb:${item.tmdb_id}`;
+
 export default function Rate() {
   const [mode, setMode] = useState("grid");
   const [page, setPage] = useState(0);
@@ -21,8 +29,13 @@ export default function Rate() {
   const [minQuality, setMinQuality] = useState(0);
   const [weights, setWeights] = useState(null);
   const [done, setDone] = useState({});
-  const [busy, setBusy] = useState(false);
+  // Keyed per title rather than one page-wide flag: a slow request used to
+  // disable the verdict buttons on every card, which is the opposite of what
+  // focus mode is for.
+  const [busy, setBusy] = useState({});
   const [toast, setToast] = useState(null);
+  //: catalogue item_id -> the `tmdb:` key its card was filed under.
+  const placed = useRef(new Map());
 
   const { data: languages } = useAsync(() => api.languages(), []);
 
@@ -46,19 +59,23 @@ export default function Rate() {
     [years, page, kind, minQuality, langParam],
   );
 
-  const items = (data?.items ?? []).filter(
-    (i) => !((i.item_id ?? `tmdb:${i.tmdb_id}`) in done),
-  );
+  const items = (data?.items ?? []).filter((i) => !(keyOf(i) in done));
 
   const give = useCallback(async (item, verdict) => {
-    const key = item.item_id ?? `tmdb:${item.tmdb_id}`;
+    const key = keyOf(item);
     setDone((prev) => ({ ...prev, [key]: verdict }));
-    setBusy(true);
+    setBusy((prev) => ({ ...prev, [key]: true }));
     try {
       if (item.external) {
         // Live mode: the title is not in the catalogue yet, so it has to be
-        // pulled in before there is anything to attach a verdict to.
-        await api.add({ tmdb_id: item.tmdb_id, kind: item.kind, verdict });
+        // pulled in before there is anything to attach a verdict to. The
+        // response carries the catalogue row it became — remembered, because
+        // undo reports the catalogue id and would otherwise have no way back
+        // to the `tmdb:` key this card was filed under.
+        const added = await api.add({ tmdb_id: item.tmdb_id, kind: item.kind, verdict });
+        if (added?.item?.item_id != null) {
+          placed.current.set(added.item.item_id, key);
+        }
       } else {
         await api.rate({ item_id: item.item_id, verdict });
       }
@@ -71,7 +88,11 @@ export default function Rate() {
         return next;
       });
     } finally {
-      setBusy(false);
+      setBusy((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
   }, []);
 
@@ -82,6 +103,14 @@ export default function Rate() {
       setDone((prev) => {
         const next = { ...prev };
         delete next[result.item_id];
+        // A live-mode title was filed under `tmdb:<id>` before it had a
+        // catalogue id. Undo reports the catalogue id, so without this the
+        // card stays hidden after an undo that actually succeeded.
+        const live = placed.current.get(result.item_id);
+        if (live) {
+          delete next[live];
+          placed.current.delete(result.item_id);
+        }
         return next;
       });
     }
@@ -185,7 +214,7 @@ export default function Rate() {
         <div className="grid grid-tight">
           {items.map((item, i) => (
             <div key={item.item_id ?? item.tmdb_id} className="enter" style={{ animationDelay: `${i * 18}ms` }}>
-              <TitleCard item={item} onVerdict={give} busy={busy} />
+              <TitleCard item={item} onVerdict={give} busy={!!busy[keyOf(item)]} />
             </div>
           ))}
         </div>
@@ -194,7 +223,7 @@ export default function Rate() {
           {items[0] ? (
             <>
               <div className="focus-card enter" key={items[0].item_id}>
-                <TitleCard item={items[0]} onVerdict={give} busy={busy} />
+                <TitleCard item={items[0]} onVerdict={give} busy={!!busy[keyOf(items[0])]} />
               </div>
               <ul className="focus-keys">
                 {Object.entries(KEYS).map(([key, verdict]) => (

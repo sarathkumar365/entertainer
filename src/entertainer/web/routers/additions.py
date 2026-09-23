@@ -41,10 +41,6 @@ def add(body: AddRequest, ctx: AppContext = Depends(get_context)) -> dict[str, A
 
     with store.session() as con:
         item_id = catalog.insert_title(con, row)
-        already = con.execute(
-            "SELECT count(*) FROM titles WHERE item_id = ?", [item_id]
-        ).fetchone()[0]
-    del already
 
     # Placing the title in the item space needs the encoder, which is a
     # 1.2GB download. On a machine that only collects verdicts that is a

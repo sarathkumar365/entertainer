@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { api } from "../api";
 import { useAsync } from "../useAsync";
@@ -92,7 +92,6 @@ function Axis({ axis }) {
 export default function Taste() {
   const [axes] = useState(6);
   const { data, error, loading } = useAsync(() => api.taste(axes), [axes]);
-  const strongest = useRef(0);
 
   if (error) {
     return (
@@ -106,7 +105,6 @@ export default function Taste() {
 
   const side = data?.side_features ?? [];
   const widest = Math.max(0.001, ...side.map((f) => Math.abs(f.weight)));
-  strongest.current = widest;
 
   return (
     <div className="page">

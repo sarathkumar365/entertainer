@@ -28,6 +28,11 @@ export default function TitleCard({
   const [leaving, setLeaving] = useState(null);
 
   const give = (verdict) => {
+    // One verdict per card. The call is deferred so the card can animate
+    // out, and without this guard a second click inside that window queued a
+    // second timer — two rate events for one title, which then distorts the
+    // prequential replay that walks the log in order.
+    if (leaving) return;
     setLeaving(verdict);
     // Long enough to read as a departure, short enough not to be a wait.
     setTimeout(() => onVerdict?.(item, verdict), 160);
@@ -79,7 +84,7 @@ export default function TitleCard({
               key={v.key}
               type="button"
               className="verdict"
-              disabled={busy}
+              disabled={busy || leaving !== null}
               onClick={() => give(v.key)}
             >
               {v.label}
