@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENT="$ROOT/.venv/bin/ent"
+UI="$ROOT/src/entertainer/web/ui"
 RUNTIME="$ROOT/data/runtime"
 LOGS="$RUNTIME/logs"
 
@@ -67,9 +68,20 @@ Usage: ./scripts/entertainer <command>
   status      Show service state and model-artifact readiness.
   logs [name] Follow app, studio, or build logs (default: app).
   build       Start Studio if needed, then run the resumable full build.
+  ui          Rebuild the browser interface from src/entertainer/web/ui.
   debug       Show model readiness and the last 40 app log lines.
 
 The app is http://127.0.0.1:8756 and Build Studio is http://127.0.0.1:8757.
+
+  /            the model itself
+  /recs        recommendations, with each prediction drawn as a distribution
+  /rate        poster grid, or a keyboard-driven focus mode
+  /library     what you have saved, watched and rated
+  /taste       the learned axes, and where you sit in the item space
+  /evidence    whether any of it is working
+
+The interface is a built bundle, committed, so nothing here needs node to
+run. Only editing it does — `ui` rebuilds after a change.
 EOF
 }
 
@@ -108,6 +120,15 @@ case "${1:-}" in
     mkdir -p "$LOGS"
     touch "$(log_file "$name")"
     tail -n 80 -f "$(log_file "$name")"
+    ;;
+  ui)
+    if [[ ! -d "$UI/node_modules" ]]; then
+      echo "Installing interface dependencies (once)."
+      (cd "$UI" && npm install)
+    fi
+    (cd "$UI" && npm run build)
+    echo "Rebuilt. Reload the browser; the bundle name is content-hashed, so"
+    echo "there is nothing stale to clear."
     ;;
   build)
     start_service studio "$ENT" studio --no-open

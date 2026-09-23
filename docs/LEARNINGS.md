@@ -61,3 +61,25 @@ general principle.
 - Session teardown kills the whole process group, `setsid` included in some cases — long jobs need a stable log path outside session-scoped directories, and resumability rather than trust.
 - Any stage over ~10 minutes with nothing to show until the end needs checkpointing: the 40-minute encode was one teardown away from being lost entirely.
 - Rich progress bars render nothing to a non-tty, so a background job needs explicit periodic logging or it looks hung.
+
+## Refactoring, and what the tests were hiding
+
+- The suite overwrote the real taste model on every run. `Paths` captured its root at import, fifteen modules bound the object, and the fixtures contained the damage by reloading a hand-maintained list — which had silently fallen out of date. Resolve late instead; a containment list is not a mechanism.
+- A guard that passes on the broken code is not a guard. The first containment test passed before and after the fix, because running it alone imported the offending module *after* the environment was set. Reproduce the real ordering or the test proves nothing.
+- Capture exact output before extracting rendering. Two real bugs were found by golden diffs that reading the change would not have caught: a language histogram with no tiebreaker, and `result.n` (predictions made) substituted for `len(items)` (verdicts supplied) under a label that said "verdicts used".
+- Ordering without a tiebreaker is a bug, not a style issue. Four `GROUP BY language ORDER BY count` queries returned a different order run to run.
+- Extract downward, not sideways. Moving a fat command into `commands/recs.py` relocates the monolith; moving its rules into `recommend.py` lets the web app call them. Do the split last, once there is nothing left in the commands but argument parsing and rendering.
+- Library code that raises `typer.Exit` can only be called from a command. That is how the business rules became terminal-only in the first place.
+- A number shown to a person needs a name for what it counts. `n_obs` included 1,000 sampled negatives, so `ent taste` reported 1,166 verdicts against 169 real ones, and every logged policy label said `n1166`.
+- Check whether the duplicate has already drifted. `ent add` and `ingest.add_title` were "the same"; only one guarded against appending a second, misaligned row for a title already in the space.
+- `ruff format` on an unformatted repository turns a ten-line fix into a three-hundred-line diff. Check whether the project is formatted before reaching for it.
+
+## Building the interface
+
+- `Array.from({length: n}, fn)` passes `(value, index)` and nothing else. Reading a third argument blanked the entire page.
+- Serving a list straight from `Engine.meta` gives cards with no posters and no synopsis: it is a lean column set loaded for the whole catalogue. Fetch full rows for the handful actually shown.
+- Two display layers clamped differently, so one slate read 10.0 in the terminal and 10.5 over HTTP. Define the display scale once.
+- A fixed `stroke-dasharray` silently truncates any path longer than it, and `pathLength="1"` does not fix it for CSS — it computes to `1px`. Measure the path.
+- An SVG `<animate>` element keeps the document from ever reporting itself settled, which breaks anything waiting for a stable frame. Use CSS.
+- A single-page app needs a catch-all route or every URL 404s on reload — and the catch-all must exclude the API, or a mistyped endpoint resolves with HTML and fails far from the cause.
+

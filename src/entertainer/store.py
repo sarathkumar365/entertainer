@@ -301,6 +301,35 @@ def negatives(con: duckdb.DuckDBPyConnection) -> list[tuple[int, float]]:
 CONSUMED_KINDS = ("rate", "skip", "seen", "dismiss")
 
 
+def active_watchlist(con: duckdb.DuckDBPyConnection) -> set[int]:
+    """Titles currently saved, rather than titles that were ever saved.
+
+    The log is append-only, so saving and unsaving both write a ``watchlist``
+    event and the most recent one for an item decides. Reading it as "has a
+    watchlist event" would make removal impossible.
+
+    Deliberately separate from a verdict: saving something says you intend to
+    watch it, not that you liked it, so it is never a training label. It does
+    exclude the title from future slates — there is no point recommending
+    what someone has already decided to watch.
+    """
+    rows = con.execute(
+        """
+        SELECT item_id, context FROM (
+            SELECT item_id, context, row_number() OVER (
+                PARTITION BY item_id ORDER BY ts DESC, event_id DESC
+            ) AS rn
+            FROM events WHERE kind = 'watchlist'
+        ) WHERE rn = 1
+        """
+    ).fetchall()
+    return {
+        int(item_id)
+        for item_id, context in rows
+        if bool((json.loads(context or "{}") or {}).get("active"))
+    }
+
+
 def interacted(con: duckdb.DuckDBPyConnection) -> set[int]:
     """Anything already watched or judged; never recommend these again."""
     placeholders = ", ".join(f"'{k}'" for k in CONSUMED_KINDS)
@@ -327,6 +356,21 @@ def already_asked(con: duckdb.DuckDBPyConnection) -> set[int]:
             "('rate', 'skip', 'seen', 'dismiss', 'unseen')"
         ).fetchall()
     }
+
+
+#: Meta key holding the item ids of the most recent slate, so a verdict can
+#: be given by position instead of by retyping a title. The writer (`ent
+#: recs`) and the readers (the verdict commands) sit far apart, so the key is
+#: named once here rather than spelled out at each end.
+LAST_SLATE = "last_slate"
+
+
+def set_last_slate(con: duckdb.DuckDBPyConnection, item_ids: list[int]) -> None:
+    set_meta(con, LAST_SLATE, [int(i) for i in item_ids])
+
+
+def last_slate(con: duckdb.DuckDBPyConnection) -> list[int]:
+    return [int(i) for i in (get_meta(con, LAST_SLATE) or [])]
 
 
 def new_slate_id() -> str:

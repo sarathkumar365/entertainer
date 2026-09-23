@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "entertainer",
+      "runtimeExecutable": ".venv/bin/ent",
+      "runtimeArgs": ["rate", "--no-open", "--port", "8756"],
+      "port": 8756
+    }
+  ]
+}

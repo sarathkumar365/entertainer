@@ -300,3 +300,115 @@ def attach_reasons(
     for rec in recs:
         vec = fs.latent[fs.index[rec.item_id]]
         rec.reasons = nearest_liked(vec, liked_vecs, liked_labels, top=top)
+
+
+@dataclass
+class Neighbour:
+    """A title close to another in the latent space, and how close."""
+
+    item_id: int
+    similarity: float
+
+
+def neighbours(
+    fs: FeatureSpace,
+    item_id: int,
+    meta: dict[int, dict],
+    k: int = 10,
+    languages: tuple[str, ...] = (),
+) -> list[Neighbour]:
+    """The k titles nearest ``item_id`` in the fused space.
+
+    Pure geometry: this ignores the taste model entirely, so it answers "what
+    is like this" rather than "what would you enjoy". That is the whole point
+    of `ent similar`, and it is why this does not go through ``recommend()``.
+
+    ``meta`` is required rather than optional because a row absent from it is
+    not recommendable at all, and silently returning such an item produces a
+    neighbour the caller cannot render.
+
+    Note the full ``argsort``. ``argpartition`` would be faster, but it
+    reorders ties, and titles at identical similarity are common enough in a
+    73k catalogue that the displayed order would wobble between runs.
+    """
+    if item_id not in fs.index:
+        raise KeyError(item_id)
+
+    sims = fs.latent @ fs.latent[fs.index[item_id]]
+    out: list[Neighbour] = []
+    for row in np.argsort(-sims):
+        candidate = int(fs.item_ids[row])
+        if candidate == item_id:
+            continue
+        row_meta = meta.get(candidate)
+        if not row_meta:
+            continue
+        if languages and row_meta.get("language") not in languages:
+            continue
+        out.append(Neighbour(item_id=candidate, similarity=float(sims[row])))
+        if len(out) == k:
+            break
+    return out
+
+
+@dataclass
+class Slate:
+    """A recommendation slate that has been logged as an observation.
+
+    The slate id matters as much as the picks: every impression is written
+    with the probability the title had of being shown, which is the only
+    thing that makes the off-policy estimate possible later. A slate produced
+    without logging is not comparable to anything.
+    """
+
+    slate_id: str
+    picks: list[Recommendation]
+
+    @property
+    def item_ids(self) -> list[int]:
+        return [p.item_id for p in self.picks]
+
+
+def produce_slate(
+    con,
+    model,
+    fs: FeatureSpace,
+    meta: dict[int, dict],
+    *,
+    k: int = 10,
+    policy: str,
+    filters: Filters | None = None,
+    remember: bool = True,
+    **kwargs,
+) -> Slate:
+    """Recommend, log the impressions, and optionally remember the slate.
+
+    The CLI and the web app both did this, with the impression tuple built by
+    hand at each end. Getting that tuple wrong does not fail loudly — it
+    writes a plausible row with the wrong propensity, and the off-policy
+    estimate is quietly biased from then on.
+
+    ``policy`` is deliberately required rather than defaulted. It is the label
+    the off-policy analysis groups by, so a slate logged under the wrong
+    policy name is worse than one not logged at all. The two callers really
+    do run different policies: the CLI exposes the strategy as a flag, the web
+    app is always Thompson.
+
+    ``remember`` writes the slate to meta so a verdict can be given by
+    position. Only the CLI wants that — there are no positions to type in a
+    browser.
+    """
+    from . import store
+
+    picks = recommend(model, fs, meta, k=k, filters=filters, **kwargs)
+    slate_id = store.new_slate_id()
+    if picks:
+        store.log_impressions(
+            con,
+            slate_id,
+            [(p.item_id, p.position, p.score, p.propensity, p.explored) for p in picks],
+            policy=policy,
+        )
+        if remember:
+            store.set_last_slate(con, [p.item_id for p in picks])
+    return Slate(slate_id=slate_id, picks=picks)

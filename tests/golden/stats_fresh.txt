@@ -1,0 +1,34 @@
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ component          ┃ state                            ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ catalog            │ ready                            │
+│ content embeddings │ ready                            │
+│ cf factors         │ ready                            │
+│ fused space        │ ready                            │
+│ taste model        │ missing                          │
+│ population prior   │ absent  optional: ent data prior │
+│ tmdb credentials   │ absent                           │
+└────────────────────┴──────────────────────────────────┘
+┏━━━━━━━━━━━━━┳━━━━━━━┓
+┃ metric      ┃ value ┃
+┡━━━━━━━━━━━━━╇━━━━━━━┩
+│ titles      │ 100   │
+│ enriched    │ 0     │
+│ ratings     │ 0     │
+│ skips       │ 0     │
+│ events      │ 0     │
+│ impressions │ 0     │
+└─────────────┴───────┘
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┃ language       ┃ titles ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━┩
+│ en (English)   │ 19     │
+│ ml (Malayalam) │ 17     │
+│ hi (Hindi)     │ 16     │
+│ ko (Korean)    │ 16     │
+│ ta (Tamil)     │ 16     │
+│ kn (Kannada)   │ 15     │
+│ de (German)    │ 1      │
+└────────────────┴────────┘
+
+next: ent onboard    (or: ent bulk seed.example.txt)

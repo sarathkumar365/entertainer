@@ -126,6 +126,115 @@ def run(
     return out
 
 
+# Interpretation thresholds. These are judgement calls about what counts as
+# evidence, not arithmetic, so they live beside the measurement rather than
+# inside whichever renderer happens to display it.
+SIGNIFICANCE = 0.05
+#: How far observed interval coverage may sit from nominal before the
+#: intervals are called miscalibrated. Wide, because coverage on a couple of
+#: hundred verdicts is itself a noisy estimate.
+CALIBRATION_BAND = 0.12
+
+MIN_VERDICTS = 8
+
+
+@dataclass
+class Reading:
+    """One row of an audit: what was measured, and what it means.
+
+    ``tone`` is a word, not markup — "good", "bad", "warn" or "" — so the same
+    reading can be printed by rich, returned as JSON, or rendered in a
+    browser without any of them knowing about the others.
+    """
+
+    measure: str
+    value: str
+    reading: str
+    tone: str = ""
+
+
+def readings(
+    result: PrequentialResult,
+    interval: float = 0.90,
+    n_verdicts: int | None = None,
+) -> list[Reading]:
+    """Turn a prequential result into the rows an audit reports.
+
+    The thresholds applied here are the whole point: a slope is only worth
+    calling a trend if it is significant *and* negative, and coverage is only
+    miscalibrated once it strays beyond a band wide enough to survive its own
+    sampling noise.
+
+    Both the slope and the rank correlation are NaN below the minimum sample.
+    They must say so rather than rendering "+nan"; that was a real bug.
+
+    ``n_verdicts`` is the size of the history walked, which is *not*
+    ``result.n``: the first ``min_train`` verdicts train the model and are
+    never predicted, so ``result.n`` is smaller. Reporting the latter under
+    the label "verdicts used" understates the history — ten verdicts in
+    produced five predictions, and the row said five.
+    """
+    early, late = result.trend()
+    slope, p_slope = result.learning_slope()
+    rho, p_rho = result.spearman()
+    coverage = result.coverage()
+
+    out = [
+        Reading("verdicts used", f"{result.n if n_verdicts is None else n_verdicts}", ""),
+        Reading("mean absolute error", f"{result.mae() * 10:.2f} / 10", "lower is better"),
+        Reading(
+            "vs running-average baseline",
+            f"{result.baseline_mae() * 10:.2f} / 10",
+            "model wins" if result.mae() < result.baseline_mae() else "model loses",
+            "good" if result.mae() < result.baseline_mae() else "bad",
+        ),
+        Reading(
+            "error: first vs last",
+            f"{early * 10:.2f} \u2192 {late * 10:.2f}",
+            "improving" if late < early else "flat or worse",
+            "good" if late < early else "warn",
+        ),
+    ]
+
+    if slope != slope or p_slope != p_slope:
+        out.append(Reading("learning slope", "\u2014", "need more data"))
+    else:
+        improving = p_slope < SIGNIFICANCE and slope < 0
+        out.append(
+            Reading(
+                "learning slope",
+                f"{slope * 100:+.3f} per 100 verdicts",
+                "significant" if improving else f"p={p_slope:.3f}",
+                "good" if improving else "",
+            )
+        )
+        # The unit is carried in the value string above because the terminal
+        # table has no room for a second line. A caller with more space can
+        # split on the space; see web/routers/insight.
+
+    calibrated = abs(coverage - interval) < CALIBRATION_BAND
+    out.append(
+        Reading(
+            f"{interval:.0%} interval coverage",
+            f"{coverage:.2f}",
+            "calibrated" if calibrated else "miscalibrated",
+            "good" if calibrated else "warn",
+        )
+    )
+
+    if rho != rho or p_rho != p_rho:
+        out.append(Reading("rank correlation", "\u2014", "need more data"))
+    else:
+        out.append(Reading("rank correlation", f"{rho:+.3f}", f"p={p_rho:.4f}"))
+
+    return out
+
+
+# Below this many logged recommendations with an outcome, the importance
+# weights have ruinous variance and the estimate is not worth reporting.
+MIN_LOGGED = 30
+
+
 def snips(
     logged: list[tuple[float, float, float]],
     new_scores: list[float],
@@ -145,7 +254,7 @@ def snips(
     estimate is still fragile, so it returns None rather than a number that
     would be over-read.
     """
-    if len(logged) < 30:
+    if len(logged) < MIN_LOGGED:
         return None
     rewards = np.array([r for r, _, _ in logged], dtype=np.float64)
     props = np.array([max(p, 1e-6) for _, p, _ in logged], dtype=np.float64)

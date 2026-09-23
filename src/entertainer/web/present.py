@@ -1,4 +1,10 @@
-"""Presentation-only shapes shared by the local web API."""
+"""Shaping catalogue rows for the interface.
+
+Pure functions of a row, shared by the feed, search, the rated list, slates
+and additions. Kept out of the routers so that every endpoint returns the
+same shape — a field added here appears everywhere at once, which is the
+point.
+"""
 
 from __future__ import annotations
 
@@ -12,10 +18,14 @@ def poster(path: str | None) -> str | None:
 
 
 def present(row: dict) -> dict:
-    """Return the stable, browser-safe representation of a catalogue title."""
+    """Shape a catalogue row for the interface.
+
+    Deliberately omits tmdb_id and other internal identifiers. Callers that
+    need to dedupe against TMDB should read the raw row — a search dedupe
+    once compared against this output and silently never matched.
+    """
     return {
         "item_id": row.get("item_id"),
-        "tmdb_id": row.get("tmdb_id"),
         "title": row.get("title"),
         "original_title": (
             row.get("original_title")
@@ -29,8 +39,8 @@ def present(row: dict) -> dict:
         "runtime": row.get("runtime"),
         "genres": list(row.get("genres") or [])[:3],
         "directors": list(row.get("directors") or [])[:2],
-        "rating": row.get("imdb_rating") or row.get("rating"),
-        "votes": row.get("imdb_votes") or row.get("votes"),
+        "rating": row.get("imdb_rating"),
+        "votes": row.get("imdb_votes"),
         "overview": (row.get("overview") or "")[:260] or None,
-        "poster": row.get("poster") or poster(row.get("poster_path")),
+        "poster": poster(row.get("poster_path")),
     }

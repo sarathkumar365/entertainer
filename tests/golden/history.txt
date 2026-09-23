@@ -1,0 +1,14 @@
+┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━┳━━━━━━━━━┓
+┃ when             ┃ title              ┃ year ┃ lang ┃ verdict ┃
+┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━╇━━━━━━━━━┩
+│ <timestamp> │ Whiplash           │ 2014 │ en   │ like    │
+│ <timestamp> │ Memories of Murder │ 2003 │ ko   │ like    │
+│ <timestamp> │ Parasite           │ 2019 │ ko   │ love    │
+│ <timestamp> │ Transformers       │ 2007 │ en   │ dislike │
+│ <timestamp> │ Morbius            │ 2022 │ en   │ dislike │
+│ <timestamp> │ Kantara            │ 2022 │ kn   │ love    │
+│ <timestamp> │ Super Deluxe       │ 2019 │ ta   │ like    │
+│ <timestamp> │ 96                 │ 2018 │ ta   │ love    │
+│ <timestamp> │ Jallikattu         │ 2019 │ ml   │ like    │
+│ <timestamp> │ Kumbalangi Nights  │ 2019 │ ml   │ love    │
+└──────────────────┴────────────────────┴──────┴──────┴─────────┘

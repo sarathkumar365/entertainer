@@ -7,7 +7,7 @@ catalogue, so nothing here touches the network or the real event log.
 from __future__ import annotations
 
 import datetime as dt
-import importlib
+import re
 
 import numpy as np
 import pytest
@@ -24,18 +24,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("TMDB_API_KEY", raising=False)
     monkeypatch.delenv("TMDB_BEARER", raising=False)
 
-    from entertainer import config, engine, store
+    # No reloading — see the note in config.Paths. ENTERTAINER_DATA_DIR above
+    # is authoritative for every module.
+    from entertainer import config, store
     from entertainer.models import encoder, fusion
-
-    for mod in (config, store, engine, encoder, fusion):
-        importlib.reload(mod)
-    from entertainer import resolve
-    from entertainer.models import features
     from entertainer.web import app as webapp
-    from entertainer.web import feed
-
-    for mod in (features, resolve, feed, webapp):
-        importlib.reload(mod)
 
     config.PATHS.ensure()
     year = dt.date.today().year
@@ -87,10 +80,13 @@ def client(tmp_path, monkeypatch):
 def test_index_serves(client):
     r = client.get("/")
     assert r.status_code == 200
-    assert "taste system" in r.text
-    assert "/static/app.js" in r.text
-    assert "prefers-reduced-motion" in client.get("/static/app.css").text
-    assert "/api/check-titles" in client.get("/static/app.js").text
+    # Both sides of this merge asserted against their own frontend: one
+    # against escapeHtml/posterUrl, the other against /static/app.js. Both
+    # were testing an implementation rather than a contract, and a third
+    # rewrite would break them again. What survives any frontend is asserted
+    # instead — see test_static_assets_referenced_by_the_page_actually_resolve
+    # and test_posters_are_absolute_tmdb_urls below.
+    assert r.headers["content-type"].startswith("text/html")
     assert "entertainer" in r.text
 
 
@@ -382,18 +378,10 @@ def test_no_token_means_no_gate(client):
 @pytest.fixture()
 def bare(tmp_path, monkeypatch):
     """A machine with no catalogue at all — a fresh clone."""
-    import importlib
-
     monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "bare"))
-    from entertainer import config, engine, store
-
-    for mod in (config, store, engine):
-        importlib.reload(mod)
+    from entertainer import config, store
     from entertainer.web import app as webapp
-    from entertainer.web import live
 
-    importlib.reload(live)
-    importlib.reload(webapp)
     config.PATHS.ensure()
     store.connect().close()
     return webapp
@@ -469,18 +457,9 @@ def test_a_machine_that_never_built_anything_still_serves(tmp_path, monkeypatch)
     first request died with "database does not exist" before the page had
     rendered anything.
     """
-    import importlib
-
     monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(tmp_path / "virgin"))
-    from entertainer import config, engine, store
-
-    for mod in (config, store, engine):
-        importlib.reload(mod)
+    from entertainer import config
     from entertainer.web import app as webapp
-    from entertainer.web import live
-
-    importlib.reload(live)
-    importlib.reload(webapp)
 
     assert not config.PATHS.catalog_db.exists()
     c = TestClient(webapp.create_app(live=True))
@@ -491,3 +470,243 @@ def test_a_machine_that_never_built_anything_still_serves(tmp_path, monkeypatch)
     assert c.get("/api/search?q=anything").status_code == 200
     assert c.post("/api/undo").json()["ok"] is False
     assert c.get("/api/mode").json()["live"] is True
+
+
+def test_sealed_cases_survive_a_page_reload(client):
+    """The browser used to hold item_id -> case_id in memory only. A reload
+    stranded the sealed pool: those titles are refused by /api/rate by
+    design, and without their case ids they could not be revealed either."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:3]:  # seal needs verdicts to fit both arms on
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+
+    ids = [i["item_id"] for i in feed[3:23]]
+    response = client.post("/api/validation/seal", json={"item_ids": ids})
+    assert response.status_code == 200, response.text
+    sealed = response.json()
+
+    open_cases = client.get("/api/validation/cases").json()["cases"]
+    assert {c["case_id"] for c in open_cases} == {c["case_id"] for c in sealed["cases"]}
+    assert {c["item_id"] for c in open_cases} == set(ids)
+    assert all(c["title"] for c in open_cases), "a case must name its title"
+
+    first = open_cases[0]
+    assert client.post(f"/api/validation/{first['case_id']}/reveal", json={"verdict": "like"}).status_code == 200
+
+    remaining = client.get("/api/validation/cases").json()["cases"]
+    assert first["case_id"] not in {c["case_id"] for c in remaining}
+    assert len(remaining) == 19
+
+
+def test_search_does_not_list_a_catalogue_title_twice(client, monkeypatch):
+    """The dedupe compared against a key _present never emitted, so the set
+    was {None} and every catalogue title TMDB also knew appeared twice."""
+    from entertainer import store
+    from entertainer.web.routers import catalogue as catalogue_router
+
+    with store.session() as con:
+        row = con.execute(
+            "SELECT item_id, title, tmdb_id FROM titles WHERE tmdb_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+    assert row, "fixture titles need a tmdb_id for this test to mean anything"
+    item_id, title, tmdb_id = row
+
+    monkeypatch.setattr(catalogue_router, "has_tmdb", lambda: True)
+    from entertainer.data import tmdb as tmdb_module
+
+    monkeypatch.setattr(
+        tmdb_module,
+        "search",
+        lambda q: [{"id": int(tmdb_id), "_kind": "movie", "title": title,
+                    "release_date": "2019-01-01", "original_language": "ml"}],
+    )
+
+    body = client.get(f"/api/search?q={title}").json()
+    assert any(c["item_id"] == item_id for c in body["catalogue"])
+    assert body["tmdb"] == [], "the catalogue already has this title"
+
+
+def test_several_apps_coexist_with_different_settings(client):
+    """State hangs off app.state, not module globals. The token tests already
+    build a second app beside the fixture's; this pins why that works."""
+    from entertainer.web import app as webapp
+
+    catalogue = webapp.create_app(live=False)
+    live = webapp.create_app(live=True)
+    assert catalogue.state.ctx.use_live is False
+    assert live.state.ctx.use_live is True
+    assert catalogue.state.ctx.engine is not live.state.ctx.engine
+
+
+def test_static_assets_referenced_by_the_page_actually_resolve(client):
+    """Replaces the old assertion that the HTML contained two specific JS
+    function names. The real failure mode of a frontend rewrite is the page
+    pointing at a bundle the build renamed."""
+    import re
+
+    html = client.get("/").text
+    refs = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    for ref in refs:
+        assert client.get(ref).status_code == 200, ref
+
+
+def test_posters_are_absolute_tmdb_urls(client):
+    """The renderer must not have to know how to build a poster URL."""
+    items = client.get("/api/feed?years=4&limit=5").json()["items"]
+    assert items
+    assert all(i["poster"].startswith("https://image.tmdb.org/t/p/") for i in items)
+
+
+def taught(client, n=4):
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:n]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+    return feed
+
+
+def test_taste_describes_axes_with_both_poles(client):
+    """An axis is only legible relative to what it points away from."""
+    taught(client)
+    body = client.get("/api/taste").json()
+    assert body["n_verdicts"] == 4, "must report real verdicts, not sampled negatives"
+    assert "rff" in body["capacity"]
+    for axis in body["axes"]:
+        assert "towards" in axis and "away" in axis
+        assert set(axis["towards"]) == {"terms", "examples"}
+    names = [f["name"] for f in body["side_features"]]
+    assert names == [
+        "consensus quality", "how widely seen", "release recency", "runtime", "is a series",
+    ]
+
+
+def test_taste_refuses_before_there_is_a_taste(client):
+    assert client.get("/api/taste").status_code == 409
+
+
+def test_audit_returns_the_raw_curve_as_well_as_the_readings(client):
+    """The interface plots the curve; it must not have to re-derive it."""
+    taught(client, 12)
+    body = client.get("/api/audit").json()
+    curve = body["curve"]
+    lengths = {len(curve[k]) for k in ("steps", "absolute_error", "baseline_error", "predicted", "actual", "inside_interval")}
+    assert len(lengths) == 1, "the parallel arrays must line up to be plottable"
+    assert body["n_verdicts"] == 12
+    assert any(r["measure"] == "verdicts used" and r["value"] == "12" for r in body["readings"])
+    assert body["off_policy"]["status"] == "not-enough-data"
+
+
+def test_audit_refuses_below_the_minimum(client):
+    taught(client, 3)
+    assert client.get("/api/audit").status_code == 409
+
+
+def test_similar_returns_neighbours_with_similarities(client):
+    item_id = client.get("/api/feed?years=4&limit=5").json()["items"][0]["item_id"]
+    body = client.get(f"/api/similar/{item_id}?k=3").json()
+    assert len(body["items"]) == 3
+    sims = [i["similarity"] for i in body["items"]]
+    assert sims == sorted(sims, reverse=True)
+    assert all(i["item_id"] != item_id for i in body["items"])
+
+
+def test_similar_404s_for_a_title_outside_the_item_space(client):
+    assert client.get("/api/similar/999999").status_code == 404
+
+
+def test_a_verdict_from_a_slate_records_which_slate(client):
+    """The off-policy join is temporal without this — a rating counts merely
+    because it came later than some impression."""
+    import json as _json
+
+    from entertainer import store
+
+    taught(client, 3)
+    slate = client.post("/api/recommendations/slate?k=3").json()
+    pick = slate["items"][0]
+    assert client.post(
+        "/api/rate",
+        json={"item_id": pick["item_id"], "verdict": "love",
+              "slate_id": slate["slate_id"], "position": 0},
+    ).json()["ok"]
+
+    with store.session(read_only=True) as con:
+        context = con.execute(
+            "SELECT context FROM events WHERE item_id = ? ORDER BY ts DESC LIMIT 1",
+            [pick["item_id"]],
+        ).fetchone()[0]
+    recorded = _json.loads(context)
+    assert recorded["slate_id"] == slate["slate_id"]
+    assert recorded["position"] == 0
+    assert recorded["verdict"] == "love"
+
+
+def test_an_ordinary_verdict_carries_no_slate(client):
+    import json as _json
+
+    from entertainer import store
+
+    item_id = client.get("/api/feed?years=4&limit=5").json()["items"][0]["item_id"]
+    client.post("/api/rate", json={"item_id": item_id, "verdict": "like"})
+    with store.session(read_only=True) as con:
+        context = _json.loads(
+            con.execute(
+                "SELECT context FROM events WHERE item_id = ? LIMIT 1", [item_id]
+            ).fetchone()[0]
+        )
+    assert "slate_id" not in context
+
+
+def test_a_client_side_route_serves_the_page_so_a_reload_works(client):
+    """The interface is a single-page app. Opening /taste directly, or
+    reloading it, must return index.html rather than 404."""
+    response = client.get("/taste")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_an_unknown_api_path_is_still_a_404(client):
+    """The catch-all must not swallow API paths: a mistyped endpoint that
+    resolves with HTML fails somewhere far from the cause."""
+    assert client.get("/api/nope").status_code == 404
+    assert client.get("/static/nope.js").status_code == 404
+
+
+def test_the_token_gate_still_covers_static_assets(client):
+    """Mount order changed; middleware coverage must not have."""
+    from fastapi.testclient import TestClient
+
+    from entertainer.web import app as webapp
+
+    guarded = TestClient(webapp.create_app(token="s3cret", live=False))
+    # Derived from the page rather than hardcoded: the bundle filename
+    # carries a content hash and changes on every build.
+    asset = re.findall(r'(?:src|href)="(/static/[^"]+)"', client.get("/").text)[0]
+    assert guarded.get(asset).status_code == 401
+    assert guarded.get("/").status_code == 401
+
+
+def test_slate_scores_are_clamped_to_the_scale_they_are_drawn_on(client):
+    """The posterior is unbounded and will predict 10.5 for something
+    squarely inside what you love. The terminal clamped it and the API did
+    not, so the same slate read 10.0 in one and 10.5 in the other."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:6]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "love"})
+
+    items = client.post("/api/recommendations/slate?k=6").json()["items"]
+    assert items
+    assert all(0.0 <= i["score"] <= 10.0 for i in items)
+    assert all(0.0 <= i["std"] <= 10.0 for i in items)
+
+
+def test_slate_items_carry_what_it_takes_to_render_them(client):
+    """Engine.meta is a lean column set with no poster and no overview. The
+    slate served straight from it, so every recommendation came back blank."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:4]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+
+    items = client.post("/api/recommendations/slate?k=4").json()["items"]
+    assert items
+    assert all(i["poster"] for i in items), "a recommendation with no poster is a blank card"
+    assert all("reasons" in i for i in items)

@@ -1,0 +1,46 @@
+╭────────────────────────────────────────────────────────────────────────────────────────────╮
+│ learned from 10 verdicts · capacity: linear (chosen by marginal likelihood, log Z = -12.6) │
+╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+axis 12  influence 0.046
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+axis 9  influence 0.021
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+axis 6  influence 0.020
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+axis 15  influence 0.014
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+axis 7  influence 0.014
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+axis 8  influence 0.009
+  towards  theme, series, lang: ta, lang: ml, lang: ko, lang: kn
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+  away from  theme, series, lang: ta, lang: ml, lang: ko
+  e.g. Breaking Bad (2008), The Godfather (1972), Whiplash (2014), Parasite (2019)
+
+surface preferences (learned, not assumed)
+   consensus quality  prefers more  ██████ +0.104
+     how widely seen  prefers more  █████ +0.096
+     release recency  prefers more  ████████ +0.134
+             runtime  prefers less   +0.000
+         is a series  prefers less  █ -0.017

@@ -244,3 +244,40 @@ def resolve_one(
     if top.score >= 0.75 and top.score - second.score >= 0.20:
         return top, hits[1:]
     return None, hits
+
+
+def by_item_id(con: duckdb.DuckDBPyConnection, item_id: int) -> Match | None:
+    """Look up a row that is already known by id.
+
+    Same column list as every other lookup here, which is the reason this
+    exists: the CLI had its own copy of the SELECT, so adding a column to
+    Match meant remembering to edit a query 1,200 lines away in another file.
+    """
+    row = con.execute(f"{_SELECT} FROM titles WHERE item_id = ?", [int(item_id)]).fetchone()
+    if not row:
+        return None
+    return _rows_to_matches([row], lambda _r: 1.0)[0]
+
+
+def from_slate(con: duckdb.DuckDBPyConnection, query: str) -> Match | None:
+    """Let a bare number refer to a position in the last recommended slate.
+
+    The daily loop is: ask for recommendations, watch one, say what you
+    thought. Retyping a title just read off the screen — often a
+    transliterated one — is the friction most likely to stop someone giving
+    feedback at all, and feedback is the only thing this system runs on.
+
+    Positions are 1-based because that is how the slate is printed. Anything
+    out of range returns None rather than raising, so "12" simply falls
+    through to being treated as a title.
+    """
+    from . import store
+
+    text = query.strip()
+    if not text.isdigit():
+        return None
+    position = int(text)
+    slate = store.last_slate(con)
+    if not (1 <= position <= len(slate)):
+        return None
+    return by_item_id(con, slate[position - 1])
