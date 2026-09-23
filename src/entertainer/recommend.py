@@ -300,3 +300,52 @@ def attach_reasons(
     for rec in recs:
         vec = fs.latent[fs.index[rec.item_id]]
         rec.reasons = nearest_liked(vec, liked_vecs, liked_labels, top=top)
+
+
+@dataclass
+class Neighbour:
+    """A title close to another in the latent space, and how close."""
+
+    item_id: int
+    similarity: float
+
+
+def neighbours(
+    fs: FeatureSpace,
+    item_id: int,
+    meta: dict[int, dict],
+    k: int = 10,
+    languages: tuple[str, ...] = (),
+) -> list[Neighbour]:
+    """The k titles nearest ``item_id`` in the fused space.
+
+    Pure geometry: this ignores the taste model entirely, so it answers "what
+    is like this" rather than "what would you enjoy". That is the whole point
+    of `ent similar`, and it is why this does not go through ``recommend()``.
+
+    ``meta`` is required rather than optional because a row absent from it is
+    not recommendable at all, and silently returning such an item produces a
+    neighbour the caller cannot render.
+
+    Note the full ``argsort``. ``argpartition`` would be faster, but it
+    reorders ties, and titles at identical similarity are common enough in a
+    73k catalogue that the displayed order would wobble between runs.
+    """
+    if item_id not in fs.index:
+        raise KeyError(item_id)
+
+    sims = fs.latent @ fs.latent[fs.index[item_id]]
+    out: list[Neighbour] = []
+    for row in np.argsort(-sims):
+        candidate = int(fs.item_ids[row])
+        if candidate == item_id:
+            continue
+        row_meta = meta.get(candidate)
+        if not row_meta:
+            continue
+        if languages and row_meta.get("language") not in languages:
+            continue
+        out.append(Neighbour(item_id=candidate, similarity=float(sims[row])))
+        if len(out) == k:
+            break
+    return out

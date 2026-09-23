@@ -939,27 +939,17 @@ def similar(
         if same_language and match.language:
             langs = (match.language,)
 
-        sims = fs.latent @ fs.latent[fs.index[match.item_id]]
-        order = np.argsort(-sims)
-        picked = []
-        for row in order:
-            iid = int(fs.item_ids[row])
-            if iid == match.item_id:
-                continue
-            r = meta.get(iid)
-            if not r or (langs and r.get("language") not in langs):
-                continue
-            picked.append((iid, float(sims[row])))
-            if len(picked) == k:
-                break
-        rows = store.item_rows(con, [p[0] for p in picked])
+        from .recommend import neighbours
+
+        picked = neighbours(fs, match.item_id, meta, k=k, languages=langs)
+        rows = store.item_rows(con, [n.item_id for n in picked])
 
     console.print(f"[dim]closest to[/dim] [bold]{match.label()}[/bold]\n")
     table = Table("similarity", "title", "year", "lang", "IMDb")
-    for iid, sim in picked:
-        r = rows[iid]
+    for n in picked:
+        r = rows[n.item_id]
         table.add_row(
-            f"{sim:.3f}", r["title"], str(r.get("year") or ""),
+            f"{n.similarity:.3f}", r["title"], str(r.get("year") or ""),
             r.get("language") or "", f"{r['imdb_rating']:.1f}" if r.get("imdb_rating") else "",
         )
     console.print(table)
