@@ -125,6 +125,24 @@ MIGRATIONS = (
     "ALTER TABLE titles ADD COLUMN IF NOT EXISTS keywords_at TIMESTAMP",
 )
 
+# The base schema is version 1 and every migration adds one. A bundle carries
+# the version it was written at, so a checkout older than the bundle can tell
+# it would silently drop columns it has never heard of. Append-only, like
+# MIGRATIONS: a change to SCHEMA itself must also land as a migration.
+SCHEMA_VERSION = 1 + len(MIGRATIONS)
+
+
+def titles_columns() -> list[str]:
+    """The catalogue columns this code knows, without opening the real file."""
+    scratch = duckdb.connect()
+    try:
+        scratch.execute(SCHEMA)
+        for statement in MIGRATIONS:
+            scratch.execute(statement)
+        return [r[1] for r in scratch.execute("PRAGMA table_info('titles')").fetchall()]
+    finally:
+        scratch.close()
+
 
 def connect(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     PATHS.ensure()

@@ -51,3 +51,9 @@ def test_unknown_ram_rules_nothing_out(ram):
 def test_duckdb_is_capped_at_the_budget(ram):
     ram(8)
     assert resources.duckdb_config() == {"memory_limit": "4096MB"}
+
+
+def test_a_bad_fraction_does_not_break_database_connections(ram, monkeypatch):
+    ram(8)
+    monkeypatch.setenv(resources.MEMORY_FRACTION_ENV, "50")
+    assert resources.duckdb_config() == {"memory_limit": "4096MB"}

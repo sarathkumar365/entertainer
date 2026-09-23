@@ -175,6 +175,8 @@ class BuildSettings:
 CATALOGUE_VERSION = 1
 CF_VERSION = 1
 CATALOGUE_INPUTS_KEY = "catalogue_inputs"
+#: The published build this catalogue was pulled from, if it was pulled.
+PUBLISHED_BUILD_KEY = "catalogue_build"
 
 
 def _file_stamp(path: Path) -> str:

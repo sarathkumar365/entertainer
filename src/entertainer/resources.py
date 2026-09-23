@@ -75,7 +75,13 @@ def budget(fraction: float | None = None) -> Budget:
 def duckdb_config() -> dict[str, str]:
     """DuckDB's own default is 80% of RAM, per process; the app and a build
     each open the database, so without a cap they can plan for 160%."""
-    b = budget()
+    try:
+        b = budget()
+    except ValueError:
+        # Every connection goes through here, the web app's included. A typo
+        # in the variable is reported by `ent setup`, which validates it; it
+        # must not take the whole app down.
+        b = budget(DEFAULT_MEMORY_FRACTION)
     if not b.total:
         return {}
     return {"memory_limit": f"{max(b.bytes // (1024**2), 256)}MB"}

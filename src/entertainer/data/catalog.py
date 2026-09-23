@@ -14,7 +14,7 @@ import polars as pl
 from rich.console import Console
 
 from ..config import PATHS, VOTE_FLOOR_BY_LANGUAGE, VOTE_FLOOR_DEFAULT
-from ..pipeline import CATALOGUE_INPUTS_KEY
+from ..pipeline import CATALOGUE_INPUTS_KEY, PUBLISHED_BUILD_KEY
 from ..store import connect, set_meta
 from . import imdb as imdb_mod
 
@@ -86,8 +86,12 @@ def _forget_catalogue_inputs(con) -> None:
     `setup` skips the rebuild when its recorded inputs match; a rebuild or a
     prune run outside `setup` must not leave that record vouching for a
     catalogue it no longer describes. `setup` re-records it when it finishes.
+    Nor is it a pulled release any more, so `ent pull` must not call it
+    up to date.
     """
-    con.execute("DELETE FROM meta WHERE key = ?", [CATALOGUE_INPUTS_KEY])
+    con.execute(
+        "DELETE FROM meta WHERE key IN (?, ?)", [CATALOGUE_INPUTS_KEY, PUBLISHED_BUILD_KEY]
+    )
 
 
 def build_base(min_votes: int = 50) -> int:

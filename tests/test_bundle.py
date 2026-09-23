@@ -151,6 +151,9 @@ def test_restore_tolerates_a_bundle_missing_newer_columns(tmp_path, monkeypatch)
                 )
                 con.close()
                 dst.write(tmp_path / "trimmed.parquet", "titles.parquet")
+            elif item == bundle.MANIFEST:
+                # Bundles that old predate checksums.
+                dst.writestr(item, '{"format": 1, "titles": 6, "contents": ["titles.parquet"]}')
             else:
                 dst.writestr(item, src.read(item))
     del shutil
