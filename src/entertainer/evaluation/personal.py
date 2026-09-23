@@ -145,6 +145,39 @@ def reveal(engine: Engine, case_id: str, verdict: str) -> dict:
     return {"ok": True, "status": "revealed"}
 
 
+def open_cases() -> list[dict]:
+    """Sealed cases still awaiting a verdict, with the titles they refer to.
+
+    Without this the sealed pool is unrecoverable. The browser held the
+    item_id-to-case_id mapping in memory only, and a sealed title is refused
+    by the ordinary rating endpoint by design — so a page reload stranded
+    every case permanently, with no way to reveal it and no way to rate it.
+    """
+    from .. import store
+
+    with store.session(read_only=True) as con:
+        rows = con.execute(
+            """
+            SELECT c.case_id, c.item_id, c.batch_id, c.sealed_at, t.title, t.year, t.kind
+            FROM validation_cases c JOIN titles t USING (item_id)
+            WHERE c.status = 'sealed'
+            ORDER BY c.sealed_at, c.case_id
+            """
+        ).fetchall()
+    return [
+        {
+            "case_id": case_id,
+            "item_id": int(item_id),
+            "batch_id": batch_id,
+            "sealed_at": str(sealed_at),
+            "title": title,
+            "year": year,
+            "kind": kind,
+        }
+        for case_id, item_id, batch_id, sealed_at, title, year, kind in rows
+    ]
+
+
 def _interval(values: np.ndarray, seed: int = 0) -> list[float] | None:
     if values.size < 2:
         return None

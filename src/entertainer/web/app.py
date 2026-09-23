@@ -376,6 +376,19 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.get("/api/validation/cases")
+    def validation_cases() -> dict[str, Any]:
+        """Sealed cases still awaiting a verdict.
+
+        The page used to hold the item_id-to-case_id mapping in memory only,
+        so a reload stranded the sealed pool: those titles cannot be rated
+        through /api/rate by design, and without their case ids they cannot
+        be revealed either.
+        """
+        from ..evaluation import personal
+
+        return {"cases": personal.open_cases()}
+
     @app.get("/api/validation/summary")
     def validation_summary() -> dict[str, Any]:
         """Interval-aware personal evidence; no bare point-estimate claims."""
@@ -437,7 +450,14 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
         if has_tmdb():
             from ..data import tmdb
 
-            known_tmdb = {c.get("tmdb_id") for c in catalogue}
+            # Built from the raw rows, not from _present output: _present
+            # does not emit tmdb_id, so this set was {None} and the dedupe
+            # below never fired — every catalogue title TMDB also knew was
+            # listed twice.
+            known_tmdb = {
+                rows[h.item_id].get("tmdb_id") for h in hits if h.item_id in rows
+            }
+            known_tmdb.discard(None)
             try:
                 for hit in tmdb.search(q)[:limit]:
                     if hit.get("id") in known_tmdb:

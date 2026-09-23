@@ -399,3 +399,57 @@ def test_a_machine_that_never_built_anything_still_serves(tmp_path, monkeypatch)
     assert c.get("/api/search?q=anything").status_code == 200
     assert c.post("/api/undo").json()["ok"] is False
     assert c.get("/api/mode").json()["live"] is True
+
+
+def test_sealed_cases_survive_a_page_reload(client):
+    """The browser used to hold item_id -> case_id in memory only. A reload
+    stranded the sealed pool: those titles are refused by /api/rate by
+    design, and without their case ids they could not be revealed either."""
+    feed = client.get("/api/feed?years=4&limit=60").json()["items"]
+    for item in feed[:3]:  # seal needs verdicts to fit both arms on
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+
+    ids = [i["item_id"] for i in feed[3:23]]
+    response = client.post("/api/validation/seal", json={"item_ids": ids})
+    assert response.status_code == 200, response.text
+    sealed = response.json()
+
+    open_cases = client.get("/api/validation/cases").json()["cases"]
+    assert {c["case_id"] for c in open_cases} == {c["case_id"] for c in sealed["cases"]}
+    assert {c["item_id"] for c in open_cases} == set(ids)
+    assert all(c["title"] for c in open_cases), "a case must name its title"
+
+    first = open_cases[0]
+    assert client.post(f"/api/validation/{first['case_id']}/reveal", json={"verdict": "like"}).status_code == 200
+
+    remaining = client.get("/api/validation/cases").json()["cases"]
+    assert first["case_id"] not in {c["case_id"] for c in remaining}
+    assert len(remaining) == 19
+
+
+def test_search_does_not_list_a_catalogue_title_twice(client, monkeypatch):
+    """The dedupe compared against a key _present never emitted, so the set
+    was {None} and every catalogue title TMDB also knew appeared twice."""
+    from entertainer import store
+    from entertainer.web import app as webapp
+
+    with store.session() as con:
+        row = con.execute(
+            "SELECT item_id, title, tmdb_id FROM titles WHERE tmdb_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+    assert row, "fixture titles need a tmdb_id for this test to mean anything"
+    item_id, title, tmdb_id = row
+
+    monkeypatch.setattr(webapp, "has_tmdb", lambda: True)
+    from entertainer.data import tmdb as tmdb_module
+
+    monkeypatch.setattr(
+        tmdb_module,
+        "search",
+        lambda q: [{"id": int(tmdb_id), "_kind": "movie", "title": title,
+                    "release_date": "2019-01-01", "original_language": "ml"}],
+    )
+
+    body = client.get(f"/api/search?q={title}").json()
+    assert any(c["item_id"] == item_id for c in body["catalogue"])
+    assert body["tmdb"] == [], "the catalogue already has this title"
