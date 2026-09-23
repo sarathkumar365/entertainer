@@ -21,7 +21,7 @@ from . import profile_io, store
 from .build_events import Reporter
 from .config import PATHS, has_tmdb, language_label
 from .engine import Engine, liked_titles
-from .errors import EntertainerError
+from .errors import EntertainerError, IntegrityRefusal
 from .manifests import write as write_manifest
 from .pipeline import preflight as pipeline_preflight
 from .render import as_ten as _as_ten
@@ -373,19 +373,19 @@ def data_cf(
     """Factorise the MovieLens co-consumption matrix."""
     import numpy as np
 
+    from .evaluation import integrity
     from .models import cf
 
     ratings = cf.load_ratings()
     users = np.sort(ratings["userId"].unique().to_numpy())
-    rng = np.random.default_rng(0)
-    held = rng.choice(users, size=min(holdout, len(users)), replace=False) if holdout else None
+    held = integrity.choose_holdout(users, holdout)
 
     ids, item_factors = cf.fit(
         factors=factors, iterations=iterations, holdout_users=held, signal=signal
     )
     cf.save(ids, item_factors)
     if held is not None:
-        np.save(PATHS.artifacts / "cf_holdout_users.npy", held.astype(np.int32))
+        integrity.save_holdout(held)
     console.print(f"[green]CF factors: {item_factors.shape}[/green]")
 
 
@@ -395,8 +395,8 @@ def data_prior(
     shrinkage: float = typer.Option(0.15, help="Pull the covariance towards a scaled identity."),
 ) -> None:
     """Learn what human taste vectors look like, to use as the cold-start prior."""
-    import numpy as np
 
+    from .evaluation import integrity
     from .models import fusion
     from .models.population import fit as fit_prior
 
@@ -415,8 +415,7 @@ def data_prior(
     if not item_of_ml:
         _fail("no MovieLens identities in the catalogue — rebuild after downloading ml-32m")
 
-    held_path = PATHS.artifacts / "cf_holdout_users.npy"
-    held = np.load(held_path) if held_path.exists() else None
+    held = integrity.load_holdout()
 
     prior = fit_prior(fs, item_of_ml, holdout_users=held, max_users=max_users,
                       shrinkage=shrinkage)
@@ -1448,6 +1447,7 @@ def evaluate(
     out: Path | None = typer.Option(None, help="Write the full report as JSON."),
 ) -> None:
     """Benchmark the engine against baselines on held-out MovieLens users."""
+    from .evaluation import integrity
     from .evaluation.simulate import ARMS, SimConfig, load_user_histories, paired_bootstrap, run
 
     _require_catalog()
@@ -1472,13 +1472,10 @@ def evaluate(
     if prior is None:
         console.print("[yellow]no population prior fitted — run `ent data prior`[/yellow]")
     else:
-        held_path = PATHS.artifacts / "cf_holdout_users.npy"
-        if not held_path.exists():
-            console.print(
-                "[red]no record of which users were held out; the prior may contain "
-                "the very users being replayed. Refusing to report a number.[/red]"
-            )
-            raise typer.Exit(code=1)
+        try:
+            integrity.require_holdout()
+        except IntegrityRefusal as exc:
+            _fail(str(exc))
 
     results = run(fs, meta, histories, cfg, elicitation=elicitation, prior=prior)
     evaluation_manifest = write_manifest(
