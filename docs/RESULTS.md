@@ -246,3 +246,33 @@ The second run appeared to show the engine significantly beating ridge and
 the centroid. It did not; it showed two handicapped baselines. Fixing them
 erased the win. Retaining these rows is the point of the exercise — the
 flattering run is the one that would have been quoted.
+
+### Negative-count validation
+
+A leave-one-out sweep over the sampled-negative hyperparameters, run against
+the 169 real verdicts in the event log, ranked the shipped setting
+(`NEGATIVE_SAMPLES=1000`, `NEGATIVE_WEIGHT=0.3`) last of everything tried:
+rank correlation +0.197, against +0.266 and AUC 0.744 for `(100, 0.3)`.
+
+The default was not changed on that evidence, because the sweep selected a
+hyperparameter in-sample on 169 labels. It was re-run instead as a full
+held-out benchmark with `ENTERTAINER_NEGATIVE_SAMPLES=100`, and the sweep
+result did not replicate.
+
+| arm | 1000 negatives | 100 negatives |
+|---|---|---|
+| ridge | 0.1835 | 0.1603 |
+| entertainer | 0.1828 | 0.1340 |
+| entertainer-flat-prior | 0.1898 | 0.1713 |
+| popularity | 0.1571 | 0.1447 |
+
+Every arm fell between the two runs, popularity included, so the two columns
+are not directly comparable — the evaluated user sample differs. The
+comparison that survives is within a column, against ridge. At 1000 negatives
+the engine is level with ridge. At 100 it sits roughly 16% below it, a drop
+much larger than the shared shift accounts for.
+
+Fewer negatives is therefore worse out of sample, and the sweep's preference
+for 100 was noise on a small label set. The default stands at 1000. This is
+the second time in this file that an in-sample result has reversed under
+held-out evaluation.

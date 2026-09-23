@@ -41,6 +41,9 @@ general principle.
 - Always run the real benchmark before believing a component helps: three separate things that improved on synthetic data did nothing or harmed on held-out users.
 - A handicapped baseline manufactures a win: giving ridge the sampled negatives and fixing kNN's normalisation erased an apparent significant victory entirely — fix the baselines before believing the result, not after.
 - Keep the losing runs. The flattering one is the one that gets quoted, so the record has to contain the corrections beside it.
+- A leave-one-out sweep on 169 labels ranked the shipped negative-sample count last and a 10x smaller one best; the held-out benchmark reversed it, so the sweep was noise. Tune on held-out users, never on the label set the sweep scores against.
+- Benchmark arms move together between runs when the evaluated user sample changes: compare within a run against a baseline arm, never across runs on the absolute metric.
+- Do not report a performance regression from a timing taken under load. A 582s test suite was 75s; load average was 23.7 on 12 cores because a benchmark, an ablation and a web app were running alongside it.
 
 ## External rating imports
 
