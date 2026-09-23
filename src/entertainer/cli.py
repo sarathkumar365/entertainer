@@ -24,7 +24,7 @@ from .engine import Engine, liked_titles
 from .manifests import write as write_manifest
 from .pipeline import preflight as pipeline_preflight
 from .render import as_ten as _as_ten
-from .render import console
+from .render import console, tables
 from .render import fail as _fail
 from .render import pm as _pm
 from .resolve import Match, resolve_one, search
@@ -215,10 +215,7 @@ def data_prune(
     verb = "would remove" if dry_run else "removed"
     console.print(f"[green]{before:,} -> {after:,}[/green] ({verb} {before - after:,})")
     if not dry_run:
-        table = Table("language", "titles")
-        for lang, count in catalog.language_histogram(25):
-            table.add_row(f"{lang} ({language_label(lang)})", f"{count:,}")
-        console.print(table)
+        console.print(tables.language_histogram(catalog.language_histogram(25)))
 
 
 @data_app.command("build")
@@ -228,10 +225,7 @@ def data_build(min_votes: int = typer.Option(50, help="Flat IMDb vote floor at b
 
     n = catalog.build_base(min_votes=min_votes)
     console.print(f"[green]{n:,} titles[/green]")
-    table = Table("language", "titles")
-    for lang, count in catalog.language_histogram(20):
-        table.add_row(f"{lang} ({language_label(lang)})", f"{count:,}")
-    console.print(table)
+    console.print(tables.language_histogram(catalog.language_histogram(20)))
 
 
 @data_app.command("enrich")
@@ -1231,10 +1225,7 @@ def stats() -> None:
     for key, value in c.items():
         t2.add_row(key, f"{value:,}")
     console.print(t2)
-    t3 = Table("language", "titles")
-    for lang, n in langs:
-        t3.add_row(f"{lang} ({language_label(lang)})", f"{n:,}")
-    console.print(t3)
+    console.print(tables.language_histogram(langs))
     console.print(f"\n[bold]next:[/bold] [cyan]{_next_step(present, c['ratings'])}[/cyan]")
 
 
