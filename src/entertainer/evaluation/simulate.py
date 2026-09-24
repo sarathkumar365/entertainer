@@ -89,7 +89,9 @@ def load_user_histories(
     known = pl.Series("movieId", list(item_of_movielens.keys()), dtype=pl.Int32)
     df = df.filter(pl.col("movieId").is_in(known.implode()))
 
-    counts = df.group_by("userId").len().filter(pl.col("len") >= min_history)
+    # Sorted because `group_by` does not keep order: a seeded draw over an
+    # unordered list picks different users every run.
+    counts = df.group_by("userId").len().filter(pl.col("len") >= min_history).sort("userId")
     rng = np.random.default_rng(seed)
     candidates = counts["userId"].to_numpy()
     if candidates.size == 0:
@@ -104,7 +106,9 @@ def load_user_histories(
         item = item_of_movielens.get(int(movie))
         if item is not None:
             out.setdefault(int(uid), {})[item] = float(rating)
-    return {u: h for u, h in out.items() if len(h) >= min_history}
+    # Sorted too: users consume one shared generator in turn, so order decides
+    # each user's split, and it should not rest on the ratings file's order.
+    return {u: out[u] for u in sorted(out) if len(out[u]) >= min_history}
 
 
 def _split(history: dict[int, float], eval_fraction: float, rng) -> tuple[dict, dict]:

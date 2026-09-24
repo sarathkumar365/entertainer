@@ -84,6 +84,23 @@ def test_histories_load_and_map_onto_catalogue_ids(fake_movielens):
     assert all(len(h) >= 60 for h in histories.values())
 
 
+def test_same_seed_picks_the_same_users_in_the_same_order(fake_movielens):
+    """Every A/B between two benchmark runs assumes they scored the same people.
+
+    `group_by` does not keep order, so a seeded draw over its output picked
+    different users on every run. The order matters too: users consume one
+    shared generator in turn, so the same users in a different order still
+    get different splits.
+    """
+    _, _, item_map, _ = fake_movielens
+    draws = [
+        list(simulate.load_user_histories(item_map, n_users=10, seed=0, min_history=60))
+        for _ in range(20)
+    ]
+    assert all(d == draws[0] for d in draws)
+    assert draws[0] == sorted(draws[0])
+
+
 def test_elicitation_and_evaluation_splits_are_disjoint(fake_movielens):
     """A leak here would make every number meaningless."""
     _, _, item_map, _ = fake_movielens
