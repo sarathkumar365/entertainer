@@ -81,6 +81,41 @@ That promise is one feature from the outside. Inside, it is a chain of smaller c
 
 This guide follows that chain.
 
+## Two kinds of learning
+
+It is worth separating these before anything else, because “the model” means two
+different things in this system and they behave nothing alike.
+
+**Catalogue learning — slow, shared, and identical for everybody.** Turning film
+text into vectors, factorising MovieLens, fusing the two spaces, fitting the
+population prior. This is the two-and-a-half-hour build. It knows nothing about
+you. It learns what films *are* and how audiences *in general* move between
+them. Two people running Entertainer have exactly the same catalogue model — and
+that is why one machine can build it and others can simply pull the result.
+
+**Personal learning — instant, private, and yours alone.** Your taste model is
+fitted from your event log: a small ridge regression over the verdicts you have
+given. It is cheap enough that there is no training step to run and nothing to
+wait for. `slates.py` and `insight.py` both call `engine.fit(con, save=False)`
+on **every request**, so the model that ranks your next slate was fitted moments
+before you saw it, and every verdict you give is reflected in the very next one.
+
+Three consequences worth knowing:
+
+- **Three verdicts is the threshold.** Below that, `engine.fit` returns nothing
+  and the population prior carries your recommendations on its own. This is why
+  a brand-new profile still produces a sensible first screen instead of noise.
+- **Old verdicts fade rather than expire.** Weights decay on a half-life of
+  1,100 days — about three years. A film you loved last month counts for more
+  than one you loved in 2022, but nothing is ever forgotten outright.
+- **There is no training phase to schedule.** Handing the system to somebody
+  else means giving them the catalogue artefacts (`ent pull`) and letting them
+  rate three titles. Their taste model exists from that moment, built live from
+  their own log, and yours never touches it.
+
+One install holds one person's taste: the `events` table has no user column by
+design, because the whole point is that your log never leaves your machine.
+
 ## Chapter 1 — First, we need a world to recommend from
 
 Before machine learning enters the picture, the app must answer: “what films and shows do we know about?” A small list of popular English titles would be easy to build, but it would fail the product promise for Malayalam, Tamil, Telugu, Korean, Japanese, and other cinema. So our first job is to make a broad local catalogue.
