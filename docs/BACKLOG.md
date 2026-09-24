@@ -13,14 +13,15 @@ says what it is showing you.
 
 | # | Work | Size |
 | --- | --- | --- |
-| 1 | Taste page, phase one — two sub-tabs, figure as centrepiece, readings reworded | Front-end only, no new maths |
-| 2 | Taste page, phase two — the real map | One new build stage, plus a Canvas/WebGL render layer |
-| 3 | The rest of the unexplained labels | Copy only |
-| 4 | The "close to" claim | Small, but a trust problem |
-| 5 | The benchmark picks different users each run | One line, but it invalidates every A/B so far |
-| 6 | Build pipeline — downloads, then TMDB caching | Biggest time savings in the project |
-| 7 | Library — grid view, legible sizes, verify Saved | Mechanical |
-| 8 | Release publish / pull — switch it on | Configuration only |
+| 1 | ~~Taste page, phase one — two sub-tabs, figure as centrepiece, readings reworded~~ | **Done** |
+| 2 | **Will I like it?** — name any title, new releases included, get a prediction | Wiring only: every piece exists |
+| 3 | Taste page, phase two — the real map | One new build stage, plus a Canvas/WebGL render layer |
+| 4 | The rest of the unexplained labels | Copy only |
+| 5 | The "close to" claim | Small, but a trust problem |
+| 6 | ~~The benchmark picks different users each run~~ — and replayed users it trained on | **Done**; every earlier number needs re-running |
+| 7 | Build pipeline — downloads, then TMDB caching | Biggest time savings in the project |
+| 8 | Library — grid view, legible sizes, verify Saved | Mechanical |
+| 9 | Release publish / pull — switch it on | Configuration only |
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
 
@@ -43,7 +44,7 @@ No new maths. Take what exists and restage it.
   Whatever they represent should be written on them.
 
 Three of the undefined terms belong to this page and are part of the rewording job here, not
-item 3:
+item 4:
 
 | Term | Note |
 | --- | --- |
@@ -53,7 +54,55 @@ item 3:
 
 ---
 
-## 2. Taste page, phase two — the real map
+## 2. Will I like it?
+
+> Let's say there's a new movie released and I want to know — is it close to my taste? I give
+> a movie name and it figures out if I will like that movie or not.
+
+Added 24 September 2026 as the immediate next task.
+
+**Nothing does this end to end today.** Every piece exists; none of them are joined:
+
+| Piece | What it does | Gap |
+| --- | --- | --- |
+| `ent why <title>` | Scores one title and names the liked titles it sits near | Terminal only, and only for titles already in the catalogue |
+| `GET /api/predict/{item_id}` | Score out of ten, 90% interval, probability you like it | Catalogue titles only; no screen calls it |
+| `GET /api/search` | Finds a name in the catalogue, then on TMDB | — |
+| `POST /api/add` | Pulls a TMDB title into the catalogue and places it in the item space; the verdict is optional | Only the Rate page uses it, and always with a verdict |
+
+A new release is exactly the case that falls through: it is on TMDB but not in the
+catalogue, so `why` and `predict` both refuse it until something adds it.
+
+**The work.**
+
+- **A "Will I like it?" box.** Type a name and pick a hit from `/api/search`. If the hit is
+  TMDB-only, `POST /api/add` with no verdict, so asking never counts as rating. Then
+  `GET /api/predict` and show the answer.
+- **The answer reuses the recommendation card.** Show the score and its distribution curve,
+  a plain yes, maybe or no from `like_probability`, and the liked titles it sits near. The
+  "close to" chips share item 5's weakness, so they must not claim more than item 5 allows.
+- **`ent why` falls back to TMDB** through the same add path when the name is not in the
+  catalogue.
+- **Say what a new release is judged on.** A brand-new title has no MovieLens history, so its
+  place in the space comes from its text alone: synopsis, genres, people. The card should
+  say so, and expect a wider curve than for an established title.
+
+**Constraints.**
+
+- Adding a title embeds it, which needs the 1.2 GB encoder. On a machine without the item
+  space, `/api/add` records the title but skips the embedding, and `/api/predict` then fails
+  with "not in the current item space". That machine needs a message saying where the
+  answer can be had, not a bare 409.
+- An asked-about title joins the catalogue for good and can surface in recommendations
+  later. That is what `add` already does and seems right, but it should be a decision rather
+  than a side effect nobody chose.
+- With fewer than three verdicts, `/api/predict` answers a bare 409 from a `ValueError`.
+  Give it the `not_enough_evidence` code, as `/api/taste` now has, so the box can say "rate a
+  few titles first" without matching on English.
+
+---
+
+## 3. Taste page, phase two — the real map
 
 **Clusters by taste.** Like a spider web or a neural net: films of the same taste occupy the
 same region. **Hover to identify** — hovering a region brightens or pulses it and names it
@@ -98,7 +147,7 @@ having them.
 
 ---
 
-## 3. The rest of the unexplained labels
+## 4. The rest of the unexplained labels
 
 Copy only — no new models, no new maths. Every item is a label, a tooltip or a sentence that
 does not exist yet.
@@ -151,7 +200,7 @@ Not a layout problem — the charts are good and stay as they are. It is the wor
 
 ---
 
-## 4. The "close to" claim is not believable
+## 5. The "close to" claim is not believable
 
 Not a missing label. The app makes a claim a viewer can check, he checked it, and it did not
 hold up. That costs trust in a way a mystery label does not.
@@ -173,7 +222,7 @@ ones.
 
 ---
 
-## 5. The benchmark picks different users each run
+## 6. The benchmark picks different users each run
 
 **Fixed.** `simulate.load_user_histories` drew its simulated users with a seeded
 `rng.choice` over the output of `group_by("userId")`. Polars does not keep order in a
@@ -199,7 +248,7 @@ suspect. Re-run from scratch before drawing conclusions.
 
 ---
 
-## 6. Build pipeline
+## 7. Build pipeline
 
 Measured on the 23 September build — **2 h 43 m** wall clock:
 
@@ -256,7 +305,7 @@ Kannada and Malayalam coverage, which is the point of the per-language scheme.
 
 ---
 
-## 7. Library
+## 8. Library
 
 - **Needs a grid view, not a list.** "The grid can be smaller."
 - **Everything is too small to read.** "Not bad, but everything is very small. I can't read
@@ -267,7 +316,7 @@ Kannada and Malayalam coverage, which is the point of the per-language scheme.
 
 ---
 
-## 8. Release publish and pull — switch it on
+## 9. Release publish and pull — switch it on
 
 The code landed in `df5f83d` and has never been used.
 
