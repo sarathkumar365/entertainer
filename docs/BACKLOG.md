@@ -17,9 +17,10 @@ says what it is showing you.
 | 2 | Taste page, phase two — the real map | One new build stage, plus a Canvas/WebGL render layer |
 | 3 | The rest of the unexplained labels | Copy only |
 | 4 | The "close to" claim | Small, but a trust problem |
-| 5 | Build pipeline — downloads, then TMDB caching | Biggest time savings in the project |
-| 6 | Library — grid view, legible sizes, verify Saved | Mechanical |
-| 7 | Release publish / pull — switch it on | Configuration only |
+| 5 | The benchmark picks different users each run | One line, but it invalidates every A/B so far |
+| 6 | Build pipeline — downloads, then TMDB caching | Biggest time savings in the project |
+| 7 | Library — grid view, legible sizes, verify Saved | Mechanical |
+| 8 | Release publish / pull — switch it on | Configuration only |
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
 

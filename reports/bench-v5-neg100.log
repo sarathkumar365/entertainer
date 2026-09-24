@@ -1,0 +1,37 @@
+300 simulated users, budget 30 answers
+elicitation pool: 6,430 recognisable titles
+opening ladder: 400 titles
+simulating ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 300/300 users 0:16:53
+┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┓
+┃ arm      ┃ NDCG@10 ┃ P@10   ┃ MAP@10 ┃ MRR@10 ┃ novelty ┃ diversi… ┃ serend. ┃
+┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━┩
+│ popular… │ 0.1447  │ 0.1747 │ 0.0746 │ 0.3868 │ 9.11    │ 0.571    │ 0.000   │
+│          │ ±0.0125 │        │        │        │         │          │         │
+│ quality… │ 0.0324  │ 0.0425 │ 0.0112 │ 0.1018 │ 11.55   │ 0.770    │ 0.003   │
+│          │ ±0.0053 │        │        │        │         │          │         │
+│ content… │ 0.1318  │ 0.1736 │ 0.0726 │ 0.3187 │ 10.92   │ 0.396    │ 0.038   │
+│          │ ±0.0129 │        │        │        │         │          │         │
+│ weighte… │ 0.1269  │ 0.1644 │ 0.0682 │ 0.3237 │ 10.71   │ 0.385    │ 0.028   │
+│          │ ±0.0127 │        │        │        │         │          │         │
+│ ridge    │ 0.1603  │ 0.1966 │ 0.0823 │ 0.3532 │ 10.29   │ 0.412    │ 0.022   │
+│          │ ±0.0123 │        │        │        │         │          │         │
+│ enterta… │ 0.1713  │ 0.2115 │ 0.0908 │ 0.3760 │ 9.89    │ 0.400    │ 0.017   │
+│          │ ±0.0134 │        │        │        │         │          │         │
+│ enterta… │ 0.0000  │ 0.0000 │ 0.0000 │ 0.0000 │ 15.36   │ 0.656    │ 0.000   │
+│          │ ±0.0000 │        │        │        │         │          │         │
+│ enterta… │ 0.1340  │ 0.1713 │ 0.0673 │ 0.3225 │ 10.69   │ 0.418    │ 0.030   │
+│          │ ±0.0115 │        │        │        │         │          │         │
+└──────────┴─────────┴────────┴────────┴────────┴─────────┴──────────┴─────────┘
+
+paired bootstrap vs each baseline (NDCG@10)
+  vs popularity         Δ=-0.0107  p=0.7353  not significant
+  vs quality-prior      Δ=+0.1016  p=0.0000  significant
+  vs content-centroid   Δ=+0.0022  p=0.4203  not significant
+  vs weighted-kNN       Δ=+0.0070  p=0.2877  not significant
+  vs ridge              Δ=-0.0264  p=0.9983  not significant
+  vs entertainer-flat-prior Δ=-0.0373  p=0.9994  not significant
+  vs entertainer-no-negatives Δ=+0.1340  p=0.0000  significant
+report -> reports/bench-v5-neg100.json
+evaluation manifest: 
+/home/sarath/projects/entertainer/data/reports/manifests/offline-evaluation-2026
+0921T190656-fba50e63.json
