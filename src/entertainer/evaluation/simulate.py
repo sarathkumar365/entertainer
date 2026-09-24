@@ -82,15 +82,23 @@ def load_user_histories(
     item_of_movielens: dict[int, int],
     n_users: int,
     seed: int,
+    *,
+    eligible: np.ndarray,
     min_history: int = MIN_HISTORY,
 ) -> dict[int, dict[int, float]]:
-    """Sample MovieLens users and map their ratings onto catalogue item ids."""
+    """Sample MovieLens users and map their ratings onto catalogue item ids.
+
+    ``eligible`` is required rather than defaulting to everyone: drawing from
+    users the model trained on reports a number that has read the answers.
+    Pass ``integrity.benchmark_users()``.
+    """
     df = cf_mod.load_ratings()
     known = pl.Series("movieId", list(item_of_movielens.keys()), dtype=pl.Int32)
     df = df.filter(pl.col("movieId").is_in(known.implode()))
 
     # Sorted because `group_by` does not keep order: a seeded draw over an
     # unordered list picks different users every run.
+    df = df.filter(pl.col("userId").is_in(pl.Series(np.asarray(eligible, dtype=np.int32)).implode()))
     counts = df.group_by("userId").len().filter(pl.col("len") >= min_history).sort("userId")
     rng = np.random.default_rng(seed)
     candidates = counts["userId"].to_numpy()

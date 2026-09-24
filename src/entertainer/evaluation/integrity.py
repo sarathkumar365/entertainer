@@ -50,6 +50,15 @@ def save_holdout(users: np.ndarray) -> Path:
     return path
 
 
+def forget_holdout() -> None:
+    """Drop the record before a refit.
+
+    A refit that withholds nobody writes no new record, and the old one would
+    otherwise go on vouching for factors that were trained on those users.
+    """
+    holdout_path().unlink(missing_ok=True)
+
+
 def load_holdout() -> np.ndarray | None:
     path = holdout_path()
     return np.load(path) if path.exists() else None
@@ -57,6 +66,17 @@ def load_holdout() -> np.ndarray | None:
 
 def holdout_recorded() -> bool:
     return holdout_path().exists()
+
+
+def benchmark_users() -> np.ndarray:
+    """The only MovieLens users a benchmark may replay: the ones held out.
+
+    Everyone else trained the CF factors, and through them the fused space
+    every arm ranks in, and the prior. Checking that the record exists is not
+    enough on its own — the replayed users must be drawn from it.
+    """
+    require_holdout()
+    return load_holdout()
 
 
 def require_holdout() -> None:

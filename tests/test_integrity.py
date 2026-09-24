@@ -60,3 +60,23 @@ def test_benchmarking_without_a_record_is_refused_not_warned():
 def test_recording_a_holdout_lifts_the_refusal():
     integrity.save_holdout(integrity.choose_holdout(np.arange(100), 5))
     integrity.require_holdout()
+
+
+def test_benchmark_users_are_the_recorded_holdout():
+    held = integrity.choose_holdout(np.arange(200), 20)
+    integrity.save_holdout(held)
+    assert np.array_equal(integrity.benchmark_users(), held.astype(np.int32))
+
+
+def test_benchmark_users_refuse_without_a_record():
+    with pytest.raises(IntegrityRefusal):
+        integrity.benchmark_users()
+
+
+def test_forgetting_the_holdout_stops_it_vouching_for_a_refit():
+    """A refit with --holdout 0 trains on everyone and writes no record; the
+    previous record must not survive to certify it."""
+    integrity.save_holdout(integrity.choose_holdout(np.arange(200), 20))
+    integrity.forget_holdout()
+    with pytest.raises(IntegrityRefusal):
+        integrity.benchmark_users()
