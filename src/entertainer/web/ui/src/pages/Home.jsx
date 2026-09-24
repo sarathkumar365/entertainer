@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import Organism from "../components/Organism";
+import { settledness } from "../components/TasteField";
 import { useAsync } from "../useAsync";
 
 /**
@@ -16,11 +17,10 @@ export default function Home() {
   const { data: mode } = useAsync(() => api.mode(), []);
 
   const verdicts = progress?.rated ?? 0;
-  // Derived rather than measured. The audit endpoint reports real interval
-  // calibration, but it refits once per verdict and takes seconds — too much
-  // for a landing screen. This stands in for it, and the Evidence tab is
-  // where the actual number lives.
-  const confidence = Math.min(0.95, 0.25 + verdicts / 400);
+  // Derived rather than measured; the Evidence tab is where the actual
+  // number lives. Same curve as the Taste figure, though that one is fed the
+  // model's effective count, which can differ from this raw one.
+  const confidence = settledness(verdicts);
 
   // The reaching lines are the last few verdicts, and the lit ends are the
   // ones you liked. Not decoration: with an empty log there is nothing

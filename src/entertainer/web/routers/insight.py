@@ -17,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from ... import store
+from ...errors import NotEnoughEvidence
 from ...evaluation import offpolicy
 from ...evaluation.prequential import MIN_VERDICTS
 from ...evaluation.prequential import readings as prequential_readings
@@ -40,8 +41,10 @@ def taste(axes: int = 6, ctx: AppContext = Depends(get_context)) -> dict[str, An
     with store.session(read_only=True) as con:
         model = ctx.engine.fit(con, save=False)
         if model is None:
-            raise HTTPException(
-                409, "at least three verdicts are needed before there is a taste to describe"
+            # A domain error rather than a bare HTTPException, so the answer
+            # carries the "not_enough_evidence" code the page branches on.
+            raise NotEnoughEvidence(
+                "at least three verdicts are needed before there is a taste to describe"
             )
         fs = ctx.engine.features(con)
         meta = ctx.engine.meta(con)

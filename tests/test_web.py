@@ -580,7 +580,10 @@ def test_taste_describes_axes_with_both_poles(client):
 
 
 def test_taste_refuses_before_there_is_a_taste(client):
-    assert client.get("/api/taste").status_code == 409
+    response = client.get("/api/taste")
+    assert response.status_code == 409
+    # The page shows the cold start on this code alone; other 409s keep their message.
+    assert response.json()["code"] == "not_enough_evidence"
 
 
 def test_audit_returns_the_raw_curve_as_well_as_the_readings(client):
