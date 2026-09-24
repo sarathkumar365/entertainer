@@ -173,7 +173,25 @@ ones.
 
 ---
 
-## 5. Build pipeline
+## 5. The benchmark picks different users each run
+
+**Fixed.** `simulate.load_user_histories` drew its simulated users with a seeded
+`rng.choice` over the output of `group_by("userId")`. Polars does not keep order in a
+`group_by`, so the same seed picked a different 300 users on every run. The popularity arm
+shows it: it has no randomness of its own, yet it scored NDCG@10 0.1571 in
+`reports/bench-v4.log` and 0.1447 in `reports/bench-v5-neg100.log`.
+
+The candidates are now sorted before the draw, and the returned histories are sorted by user
+id. The order matters as much as the set: users take turns drawing from one shared generator,
+so the same users in a different order still get different splits.
+
+**Consequence.** No comparison between two benchmark runs made before this fix is valid,
+v4 against v5 included. A run's comparisons between its own arms still hold, because every
+arm in a run scores the same users. To compare configurations again, re-run both of them.
+
+---
+
+## 6. Build pipeline
 
 Measured on the 23 September build — **2 h 43 m** wall clock:
 
@@ -230,7 +248,7 @@ Kannada and Malayalam coverage, which is the point of the per-language scheme.
 
 ---
 
-## 6. Library
+## 7. Library
 
 - **Needs a grid view, not a list.** "The grid can be smaller."
 - **Everything is too small to read.** "Not bad, but everything is very small. I can't read
@@ -241,7 +259,7 @@ Kannada and Malayalam coverage, which is the point of the per-language scheme.
 
 ---
 
-## 7. Release publish and pull — switch it on
+## 8. Release publish and pull — switch it on
 
 The code landed in `df5f83d` and has never been used.
 
