@@ -160,34 +160,52 @@ kbd {
 .toast button { color: var(--fg-2); text-decoration: underline; }
 
 /* --- taste -------------------------------------------------------------- */
-.field { margin: 0 0 30px; }
-.field svg { width: 100%; height: auto; max-height: 260px; display: block; }
-.field-far { fill: var(--fg-3); opacity: 0.5; }
-.field-near { fill: var(--fg); opacity: 0.9; }
-.field-ring { fill: none; stroke: var(--fg); stroke-width: 0.5; opacity: 0.3; }
-.field-ring-wide { opacity: 0.14; }
-.field-vector { stroke: var(--fg-2); stroke-width: 0.5; stroke-dasharray: 2 3; opacity: 0.6; }
-.field-origin { fill: var(--fg-3); }
-.field figcaption { display: flex; justify-content: space-between; margin-top: 8px; }
+.taste-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.taste-tabs button { font-size: 10.5px; padding: 9px 16px; }
 
-.taste-meta { margin: 0 0 24px; }
+.taste-field { margin: 0; }
+.taste-field-stage { position: relative; height: max(380px, calc(100vh - 250px)); }
+.taste-field canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.taste-tag {
+  position: absolute; pointer-events: none; white-space: nowrap;
+  font-size: 12.5px; color: var(--fg-2); letter-spacing: 0.01em;
+  text-shadow: 0 0 6px var(--void), 0 0 12px var(--void);
+}
+.taste-tag b { font-weight: 500; color: var(--fg); }
+.taste-tag-inner { transform: translate(-50%, -100%); color: var(--fg); }
+.taste-tag-outer { transform: translateY(-50%); }
+.taste-tag-path { transform: translate(-50%, -140%); }
+.taste-tag-start { transform: translateY(-50%); color: var(--fg); }
+.taste-field figcaption { margin-top: 14px; font-size: 13px; color: var(--fg-3); line-height: 1.6; max-width: 70ch; }
 
-.axis { margin: 0 0 22px; border-top: 1px solid var(--line-2); padding-top: 14px; }
-.axis header { display: flex; justify-content: space-between; margin-bottom: 9px; }
+.taste-readings { max-width: 860px; }
+.taste-lede { font-size: 16px; color: var(--fg-2); margin: 0 0 30px; }
+.taste-note { font-size: 14px; color: var(--fg-2); line-height: 1.65; margin: 8px 0 22px; max-width: 68ch; }
+
+.axis { margin: 0 0 26px; border-top: 1px solid var(--line-2); padding-top: 18px; }
+.axis-title { font-size: 18px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.4; }
+.axis-title em { font-style: normal; color: var(--fg); }
+.axis-away { margin: 4px 0 14px; font-size: 15px; color: var(--fg-2); line-height: 1.5; }
+.axis-pull .label { font-size: 10px; display: block; margin-bottom: 7px; }
 .meter { height: 2px; background: var(--line-2); border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
 .meter i { display: block; height: 100%; background: var(--fg); transition: width 0.7s var(--spring); }
 .poles { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.poles .label { font-size: 10px; letter-spacing: 0.12em; }
 .pole-towards { color: var(--fg-2); }
-.pole-terms { margin: 0; font-size: 13px; line-height: 1.6; }
-.pole-examples { margin: 6px 0 0; font-size: 11px; color: var(--fg-3); line-height: 1.5; }
+.pole-examples { margin: 6px 0 0; font-size: 13.5px; color: var(--fg-2); line-height: 1.55; }
 
-.surface { margin-top: 16px; display: grid; gap: 9px; }
-.surface-row { display: grid; grid-template-columns: 150px 1fr 64px; gap: 12px; align-items: center; }
-.surface-name { font-size: 12.5px; color: var(--fg-2); }
+.surface { margin-top: 16px; display: grid; gap: 16px; }
+.surface-row { display: grid; grid-template-columns: 1fr 180px; gap: 20px; align-items: center; }
+.surface-sentence { margin: 0; font-size: 15px; }
+.surface-hint { margin: 3px 0 0; font-size: 12.5px; color: var(--fg-3); }
 .surface-bar { height: 3px; background: var(--line-2); border-radius: 2px; overflow: hidden; }
 .surface-bar i { display: block; height: 100%; background: var(--fg); }
 .surface-bar i.neg { background: var(--fg-3); }
-.surface-weight { font-size: 11px; color: var(--fg-3); text-align: right; }
+
+.taste-details { margin-top: 34px; border-top: 1px solid var(--line-2); padding-top: 14px; }
+.taste-details summary { cursor: pointer; font-size: 10px; }
+.taste-details p { font-size: 13px; color: var(--fg-2); line-height: 1.6; max-width: 68ch; }
+.taste-raw { margin-right: 14px; font-size: 12px; white-space: nowrap; }
 
 /* --- evidence ----------------------------------------------------------- */
 .evidence-loading { display: grid; place-items: center; gap: 16px; min-height: 60vh; }
@@ -230,7 +248,9 @@ kbd {
 @media (max-width: 720px) {
   .poles, .focus { grid-template-columns: 1fr; }
   .recs-head { flex-direction: column; align-items: flex-start; }
-  .surface-row { grid-template-columns: 110px 1fr 56px; }
+  .surface-row { grid-template-columns: 1fr; gap: 8px; }
+  .taste-tag { font-size: 11px; white-space: normal; max-width: 42vw; }
+  .taste-tag-outer { display: none; }
   .home-corner .reading-sm { font-size: 14px; }
 }
 
