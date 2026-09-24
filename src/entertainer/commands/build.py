@@ -521,6 +521,7 @@ def data_cf(
     # them after this returns. A standalone run with other settings must not
     # leave the old stamp vouching for factors it no longer describes.
     pipeline.cf_inputs_path().unlink(missing_ok=True)
+    integrity.forget_holdout()
     ratings = cf.load_ratings()
     users = np.sort(ratings["userId"].unique().to_numpy())
     held = integrity.choose_holdout(users, holdout)

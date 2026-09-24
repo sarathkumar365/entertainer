@@ -23,6 +23,7 @@ from entertainer.models.features import build as build_features
 N_ITEMS = 300
 N_USERS = 40
 GROUPS = 2
+EVERYONE = np.arange(1, N_USERS + 1)
 
 
 @pytest.fixture()
@@ -74,7 +75,9 @@ def fake_movielens(monkeypatch):
 
 
 def _histories(item_map):
-    return simulate.load_user_histories(item_map, n_users=N_USERS, seed=0, min_history=60)
+    return simulate.load_user_histories(
+        item_map, n_users=N_USERS, seed=0, eligible=EVERYONE, min_history=60
+    )
 
 
 def test_histories_load_and_map_onto_catalogue_ids(fake_movielens):
@@ -94,11 +97,24 @@ def test_same_seed_picks_the_same_users_in_the_same_order(fake_movielens):
     """
     _, _, item_map, _ = fake_movielens
     draws = [
-        list(simulate.load_user_histories(item_map, n_users=10, seed=0, min_history=60))
+        list(simulate.load_user_histories(
+            item_map, n_users=10, seed=0, eligible=EVERYONE, min_history=60
+        ))
         for _ in range(20)
     ]
     assert all(d == draws[0] for d in draws)
     assert draws[0] == sorted(draws[0])
+
+
+def test_only_held_out_users_are_replayed(fake_movielens):
+    """Everyone else trained the CF factors and the prior. Replaying them
+    scores the model on answers it has already read."""
+    _, _, item_map, _ = fake_movielens
+    held = np.arange(1, 13)
+    histories = simulate.load_user_histories(
+        item_map, n_users=N_USERS, seed=0, eligible=held, min_history=60
+    )
+    assert set(histories) == set(held.tolist())
 
 
 def test_elicitation_and_evaluation_splits_are_disjoint(fake_movielens):

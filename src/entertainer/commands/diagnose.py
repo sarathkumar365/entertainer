@@ -186,20 +186,23 @@ def evaluate(
         )
 
     item_of_ml = {int(k): int(v) for k, v in ml_map.items() if int(v) in fs.index}
+    try:
+        held = integrity.benchmark_users()
+    except IntegrityRefusal as exc:
+        _fail(str(exc))
     cfg = SimConfig(n_users=users, budget=budget)
-    histories = load_user_histories(item_of_ml, users, cfg.seed)
+    histories = load_user_histories(item_of_ml, users, cfg.seed, eligible=held)
     if not histories:
-        _fail("no usable MovieLens histories — is the catalogue too narrow?")
-    console.print(f"[dim]{len(histories)} simulated users, budget {budget} answers[/dim]")
+        _fail("no usable MovieLens histories among the held-out users — "
+              "is the catalogue too narrow?")
+    console.print(
+        f"[dim]{len(histories)} simulated users, drawn from {len(held):,} held out, "
+        f"budget {budget} answers[/dim]"
+    )
 
     prior = engine.prior()
     if prior is None:
         console.print("[yellow]no population prior fitted — run `ent data prior`[/yellow]")
-    else:
-        try:
-            integrity.require_holdout()
-        except IntegrityRefusal as exc:
-            _fail(str(exc))
 
     results = run(fs, meta, histories, cfg, elicitation=elicitation, prior=prior)
     evaluation_manifest = write_manifest(

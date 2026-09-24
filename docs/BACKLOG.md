@@ -185,9 +185,17 @@ The candidates are now sorted before the draw, and the returned histories are so
 id. The order matters as much as the set: users take turns drawing from one shared generator,
 so the same users in a different order still get different splits.
 
-**Consequence.** No comparison between two benchmark runs made before this fix is valid,
-v4 against v5 included. A run's comparisons between its own arms still hold, because every
-arm in a run scores the same users. To compare configurations again, re-run both of them.
+**Also fixed: the replayed users were not the held-out ones.** `ent data cf` withholds
+2,000 MovieLens users from the CF factors and the prior, and `ent eval` checked that record
+existed but never drew from it. Nearly every replayed user had helped train the fused space
+every arm ranks in, so the absolute scores were inflated. The check was also skipped
+entirely whenever no prior was fitted. `integrity.benchmark_users()` now returns the
+holdout or refuses, and `load_user_histories` requires the eligible users as an argument.
+
+**Consequence.** No benchmark number from before these fixes stands. Comparisons between
+two runs were invalid because they scored different users. Absolute scores were inflated by
+the leak, and that affects the arms unevenly, so even the gaps between arms in one run are
+suspect. Re-run from scratch before drawing conclusions.
 
 ---
 
