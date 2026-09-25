@@ -65,14 +65,55 @@ def test_a_nan_slope_says_so_rather_than_printing_nan():
     assert row(readings(res), "rank correlation").value == "—"
 
 
-def test_an_improving_slope_counts_only_when_significant_and_negative():
-    falling = result([1.0 - i * 0.1 for i in range(12)], [0.5] * 12)
-    slope, p = falling.learning_slope()
-    assert slope < 0 and p < SIGNIFICANCE
-    assert row(readings(falling), "learning slope").reading == "significant"
+def test_an_improving_slope_counts_only_when_significant_and_positive():
+    """Polarity. The slope is measured on skill — the control's error minus
+    the model's — so pulling *ahead* of the control is a rising line. It used
+    to be measured on raw error, where improving meant falling."""
+    gaining = result([1.0 - i * 0.1 for i in range(12)], [0.5] * 12)
+    slope, p = gaining.learning_slope()
+    assert slope > 0 and p < SIGNIFICANCE
+    assert row(readings(gaining), "learning slope").reading == "significant"
 
     flat = result([0.5, 0.52, 0.48, 0.51, 0.49, 0.5, 0.51, 0.49, 0.5, 0.5], [0.5] * 10)
     assert row(readings(flat), "learning slope").reading.startswith("p=")
+
+
+def test_a_model_losing_ground_is_not_called_improving():
+    losing = result([0.1 + i * 0.05 for i in range(12)], [0.5] * 12)
+    slope, _ = losing.learning_slope()
+    assert slope < 0
+    assert row(readings(losing), "learning slope").reading != "significant"
+    assert row(readings(losing), "skill: first vs last").reading == "flat or worse"
+
+
+def test_steps_with_nothing_to_beat_are_reported_and_excluded():
+    """The author's log opened with seventeen identical verdicts, where the
+    running average was already exactly right. Counting those as ties let a
+    constant opening drag the trend; they are dropped, and the drop is said
+    out loud rather than silently changing the denominator."""
+    res = result([0.0] * 10 + [0.1] * 10, [0.0] * 10 + [0.3] * 10)
+    rows = readings(res)
+    discriminating = row(rows, "steps that could discriminate")
+    assert discriminating.value == "10 of 20"
+    assert discriminating.reading == "10 had nothing to beat"
+    assert discriminating.tone == "dim"
+
+    # And the surviving ten all show the same +0.20 gain, so the trend is flat
+    # rather than the sharp rise that including the zeros would manufacture.
+    early, late = res.trend(window=5)
+    assert early == late
+
+
+def test_no_discriminating_row_when_every_step_counted():
+    rows = readings(result([0.1] * 10, [0.3] * 10))
+    assert not any(r.measure == "steps that could discriminate" for r in rows)
+
+
+def test_skill_is_rendered_with_its_sign():
+    """A bare "2.00 → 0.50" reads as an error falling. The sign is what says
+    these are gains over the control, in points out of ten."""
+    rows = readings(result([0.1] * 10, [0.3] * 10))
+    assert row(rows, "skill: first vs last").value == "+2.00 \u2192 +2.00"
 
 
 def test_coverage_within_the_band_is_calibrated():
