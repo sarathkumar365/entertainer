@@ -307,6 +307,24 @@ kbd {
 .offpolicy { display: grid; gap: 10px; }
 .offpolicy-why { margin: 0; font-size: 14px; color: var(--fg-2); }
 .offpolicy-pair { display: flex; gap: 46px; margin: 6px 0; }
+/* How far off the off-policy check is. A bar so the gap reads at a glance
+   instead of having to be worked out from two numbers. */
+.offpolicy-bar {
+  height: 3px; background: var(--line-2); overflow: hidden; max-width: 320px;
+}
+.offpolicy-bar span {
+  display: block; height: 100%; background: var(--rated);
+  transition: width 0.6s var(--spring);
+}
+
+/* Why a verdict on /recs is worth more than the same verdict elsewhere. Stated
+   on the page because the README said it and no screen did. */
+.recs-worth {
+  margin: 10px 0 0; max-width: 54ch; line-height: 1.7;
+  border-left: 2px solid var(--rated); padding-left: 11px;
+}
+.recs-worth strong { color: var(--fg); font-weight: 500; }
+.recs-worth-done { border-left-color: var(--line); }
 
 .validation { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px; background: var(--line-2); border: 1px solid var(--line-2); margin-top: 14px; }
 

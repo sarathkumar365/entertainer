@@ -11,6 +11,41 @@ const OUTCOME = VERDICTS.filter((v) => v.key !== "unseen").concat([
   { key: "unseen", label: "Not yet" },
 ]);
 
+/** Why a verdict given here is worth more than the same verdict elsewhere.
+ *
+ * Every slate logs the probability each title had of being shown, so a verdict
+ * given from this page can be matched back to the slate that produced it. That
+ * is the only thing that can answer "were those picks any good?" — a rating
+ * given on the Rate page teaches the model just as much but measures nothing.
+ *
+ * The README has always said so. No screen did, which is why the off-policy
+ * check sat at 16 of the 30 outcomes it needs while hundreds of verdicts went
+ * in elsewhere.
+ */
+function Worth({ outcomes }) {
+  if (!outcomes) return null;
+  const { have, need } = outcomes;
+  const done = have >= need;
+  const left = need - have;
+  return (
+    <p className={`recs-worth label${done ? " recs-worth-done" : ""}`}>
+      <strong>Rating here counts twice.</strong>{" "}
+      {done ? (
+        <>
+          Every verdict on this page also measures whether the picks were good,
+          and there are now enough of them — see Evidence.
+        </>
+      ) : (
+        <>
+          A verdict here also measures whether the picks were good, which no
+          other screen can do. {have} of {need} recorded; {left} more
+          {left === 1 ? " unlocks" : " unlock"} the check on Evidence.
+        </>
+      )}
+    </p>
+  );
+}
+
 export default function Recommendations() {
   const [nonce, setNonce] = useState(0);
   const [kind, setKind] = useState("both");
@@ -82,6 +117,7 @@ export default function Recommendations() {
             the less it knows. Saying what happened is the only thing that tells it
             whether a slate was any good.
           </p>
+          <Worth outcomes={data?.outcomes} />
           <div className="mode-switch recs-kind">
             {[["both", "Everything"], ["movie", "Films"], ["tv", "Series"]].map(([value, label]) => (
               <button

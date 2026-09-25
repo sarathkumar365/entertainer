@@ -93,39 +93,84 @@ function Curve({ curve }) {
   );
 }
 
+/** "Were the recommendations any good?" — and what it is waiting for.
+ *
+ * The old copy said "10 of 30 recommendations have an outcome", which parses
+ * only if you already know what an outcome is and why thirty. It is renamed to
+ * what it measures, given a progress bar so the gap is visible rather than
+ * arithmetic, and told to say plainly that only the Recommendations page closes
+ * it.
+ */
 function OffPolicy({ result }) {
   if (!result) return null;
+
   if (result.status !== "ok") {
+    if (result.status === "not-enough-data") {
+      const need = 30;
+      const left = need - result.n_usable;
+      return (
+        <div className="offpolicy">
+          <span className="label">Were the recommendations any good?</span>
+          <p className="offpolicy-why">
+            Not enough answers yet to say.
+          </p>
+          <div className="offpolicy-bar" aria-hidden="true">
+            <span style={{ width: `${Math.min(100, (result.n_usable / need) * 100)}%` }} />
+          </div>
+          <p className="label">
+            {result.n_usable} of {need} recommended titles have been rated
+            afterwards. {left} more {left === 1 ? "is" : "are"} needed before the
+            answer means anything.
+          </p>
+          <p className="label">
+            Only the <strong>Recommendations</strong> page counts towards this.
+            Those slates record how likely each title was to be shown, so a
+            verdict there can be traced back to the pick that caused it; ratings
+            given anywhere else teach the model but cannot measure it.
+          </p>
+        </div>
+      );
+    }
     const why = {
-      "not-enough-data": `${result.n_usable} of 30 recommendations have an outcome`,
-      "no-model": "not enough verdicts to fit a model",
-      "item-space-changed": "a logged title has left the item space",
-      "estimate-unavailable": "the estimator declined",
+      "no-model": "there are not yet enough verdicts to fit a model to compare against",
+      "item-space-changed": "a title in an old slate is no longer in the catalogue, so its position has changed meaning",
+      "estimate-unavailable": "the estimate came out too unstable to report",
     }[result.status];
     return (
       <div className="offpolicy">
-        <span className="label">Off-policy check</span>
-        <p className="offpolicy-why">{why}</p>
-        <p className="label">
-          Rating a title from the Recommendations tab is what produces one.
-        </p>
+        <span className="label">Were the recommendations any good?</span>
+        <p className="offpolicy-why">Cannot say: {why}.</p>
       </div>
     );
   }
+
+  const shown = result.logged_value * 10;
+  const now = result.estimate * 10;
+  const better = now > shown;
   return (
     <div className="offpolicy">
-      <span className="label">Off-policy estimate — weaker evidence, indicative only</span>
+      <span className="label">Were the recommendations any good?</span>
       <div className="offpolicy-pair">
         <div>
-          <span className="label">Slates actually shown</span>
-          <div className="reading num">{(result.logged_value * 10).toFixed(2)}</div>
+          <span className="label">You rated the picks you were shown</span>
+          <div className="reading num">{shown.toFixed(2)}</div>
         </div>
         <div>
-          <span className="label">Today&rsquo;s model would have</span>
-          <div className="reading num">{(result.estimate * 10).toFixed(2)}</div>
+          <span className="label">Today&rsquo;s model would have picked ones you rate</span>
+          <div className="reading num">{now.toFixed(2)}</div>
         </div>
       </div>
-      <p className="label">over {result.n_usable} logged recommendations you later rated</p>
+      <p className="label">
+        {better
+          ? "So the model has improved since those slates were shown."
+          : "So the model has not improved on those slates."}{" "}
+        Worked out from {result.n_usable} recommended titles you later rated.
+      </p>
+      <p className="label">
+        Weaker evidence than everything above it, and deliberately labelled so:
+        it re-weights old answers to stand in for answers never given, and that
+        correction is noisy on a few hundred of them.
+      </p>
     </div>
   );
 }
