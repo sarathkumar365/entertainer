@@ -11,8 +11,11 @@
 
 /* Below the creature, not on top of it: the organism is the subject of this
    screen and the copy is a caption to it. */
+/* Centred by margin, not translateX: `.enter` animates transform and its
+   end state (none) used to cancel the centring, leaving the caption off to
+   the right. */
 .home-centre {
-  position: absolute; left: 50%; bottom: 11%; transform: translateX(-50%);
+  position: absolute; left: 0; right: 0; bottom: 11%; margin: 0 auto;
   text-align: center; max-width: 430px; padding: 0 20px;
 }
 .home-centre h1 { font-size: 26px; }
@@ -29,6 +32,68 @@
 .cta:hover { transform: translateY(-1px); }
 .cta-quiet { background: transparent; color: var(--fg-2); border: 1px solid var(--line); }
 .cta-quiet:hover { color: var(--fg); }
+
+/* Will I like it? The organism draws the box; these sit on top of it. The
+   position and width must match the pill in Organism.jsx: centred at 42%
+   height, min(560px, width - 32px) wide, 56px tall. */
+.home-ask {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  width: min(560px, calc(100% - 32px)); height: 56px;
+  display: flex; align-items: center; padding: 0 12px 0 28px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.25s var(--spring);
+}
+.home-ask.on { opacity: 1; pointer-events: auto; transition: opacity 0.5s var(--spring) 0.22s; }
+.home-ask input {
+  flex: 1; min-width: 0; height: 100%;
+  background: transparent; border: 0; outline: none;
+  font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; color: var(--fg);
+}
+.home-ask input::placeholder { color: var(--fg-3); }
+.home-ask-go {
+  display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%;
+  color: var(--fg-2); transition: color 0.3s var(--spring), transform 0.3s var(--spring);
+}
+.home-ask-go:hover, .home-ask-go:focus-visible { color: var(--fg); transform: scale(1.08); }
+
+.home-choices {
+  position: absolute; left: 50%; top: calc(42% + 44px); transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px)); display: grid; gap: 6px;
+}
+.home-choices-label { margin: 0 0 2px 4px; }
+.home-choice {
+  display: grid; grid-template-columns: 30px 1fr auto; gap: 12px; align-items: center;
+  padding: 7px 12px 7px 8px; border-radius: 6px; text-align: left;
+  border: 1px solid var(--line-2); background: rgba(8, 8, 10, 0.55);
+  backdrop-filter: blur(6px);
+  transition: border-color 0.25s var(--spring), background 0.25s var(--spring);
+}
+.home-choice.on { border-color: var(--line); background: rgba(255, 255, 255, 0.04); }
+.home-choice img, .home-choice-blank {
+  width: 30px; height: 44px; object-fit: cover; border-radius: 3px; background: var(--line-2); display: block;
+}
+.home-choice-text { display: grid; gap: 3px; min-width: 0; }
+.home-choice-title { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-choice-meta { font-size: 10.5px; color: var(--fg-3); }
+.home-choice-tag { font-size: 9px; }
+
+.home-score {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+  display: flex; align-items: baseline; gap: 4px; pointer-events: none;
+}
+.home-score > span { font-size: 46px; letter-spacing: -0.04em; }
+.home-score small { font-size: 13px; color: var(--fg-3); }
+
+.home-answer { max-width: 480px; }
+.home-line { color: var(--fg-2); font-size: 12.5px; line-height: 1.7; margin: 6px 0; }
+.home-line em { color: var(--fg); font-style: normal; }
+.home-line a { color: var(--fg); text-decoration: underline; }
+.home-note { color: var(--fg-3); }
+.home-verdict-title { font-size: 20px; margin: 0; }
+.home-verdict-title .num { color: var(--fg-3); font-size: 15px; }
+.home-verdict { margin: 6px 0 2px; font-size: 14px; color: var(--fg-2); }
+.home-verdict.liked { color: rgb(214, 232, 150); }
+.home-answer .home-actions { margin-top: 16px; }
 
 /* --- cards -------------------------------------------------------------- */
 .grid {
@@ -252,6 +317,8 @@ kbd {
   .taste-tag { font-size: 11px; white-space: normal; max-width: 42vw; }
   .taste-tag-outer { display: none; }
   .home-corner .reading-sm { font-size: 14px; }
+  .home-actions { flex-wrap: wrap; }
+  .home-score > span { font-size: 38px; }
 }
 
 /* --- library ------------------------------------------------------------ */

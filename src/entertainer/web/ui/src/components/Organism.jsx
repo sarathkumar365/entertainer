@@ -1,6 +1,28 @@
 import { useEffect, useRef } from "react";
 
 /**
+ * The search box the membrane becomes. Home positions its input over this
+ * with CSS (centred at 42% height, same width rule), so the two must agree.
+ */
+const PILL_HALF_HEIGHT = 28;
+const pillHalfWidth = (width) => Math.min(560, width - 32) / 2;
+
+const LIME = "214,232,150";
+
+/**
+ * Distance from the centre to a stadium's edge along `angle`: a flat band
+ * of half-height `hh` capped by semicircles, `hw` from centre to tip.
+ */
+function stadiumRadius(angle, hw, hh) {
+  const c = Math.abs(Math.cos(angle));
+  const s = Math.abs(Math.sin(angle));
+  const core = Math.max(0, hw - hh);
+  if (s > 1e-6 && (hh / s) * c <= core) return hh / s;
+  const along = c * core;
+  return along + Math.sqrt(Math.max(0, along * along - core * core + hh * hh));
+}
+
+/**
  * The taste model, drawn as a living thing.
  *
  * Every property is bound to a real quantity rather than chosen for effect:
@@ -9,6 +31,14 @@ import { useEffect, useRef } from "react";
  *   wobble     <- 1 - confidence; a model that is guessing visibly wavers
  *   ripple     <- a verdict landing
  *   reaching   <- how many titles are in play; `rated` of them answered
+ *
+ * Asked about one title (`result`), it answers with the same body:
+ *
+ *   ring       <- the score, as a fraction of a full circle
+ *   firmness   <- the width of the 90% interval
+ *   glow       <- the chance you like it; lime past even odds
+ *
+ * `shape="pill"` flattens the membrane into the search box that asks.
  *
  * Two things are ambient rather than bound, and should not be read as data:
  * the scattered field, which is texture at catalogue scale, and which
@@ -28,9 +58,17 @@ export default function Organism({
   working = false,
   pulseKey = 0,
   compact = false,
+  shape = "blob",
+  thinking = false,
+  result = null,
 }) {
   const canvasRef = useRef(null);
-  const state = useRef({ pulses: [], t: 0, mouse: [-999, -999] });
+  const state = useRef({ pulses: [], t: 0, mouse: [-999, -999], m: 0, reveal: 0, since: 0 });
+  // Read by the running loop rather than listed as effect dependencies:
+  // restarting the loop re-seeds the nodes, and a morph must be one
+  // continuous creature, not a new one.
+  const live = useRef({ shape, thinking, result });
+  live.current = { shape, thinking, result };
 
   // A pulse per verdict recorded, driven by a key the caller bumps.
   useEffect(() => {
@@ -42,6 +80,7 @@ export default function Organism({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let frame;
     let stars = [];
     let width = 0;
@@ -84,22 +123,27 @@ export default function Organism({
     observer.observe(canvas);
 
     function radiusAt(angle, base, tight, time) {
-      const wobble = 1 - tight;
+      const { m } = state.current;
+      const loose = 1 - m;
+      const wobble = (1 - tight) * loose;
       let r =
         base *
         (1 +
           0.085 * wobble * Math.sin(3 * angle + time * 0.55) +
           0.06 * wobble * Math.sin(5 * angle - time * 0.38) +
           0.038 * wobble * Math.sin(7 * angle + time * 0.72) +
-          0.02 * Math.sin(11 * angle - time * 0.9));
-      r *= 1 + 0.022 * Math.sin(time * 1.1);
+          0.02 * loose * Math.sin(11 * angle - time * 0.9));
+      r *= 1 + 0.022 * loose * Math.sin(time * 1.1);
       // While the engine is thinking, the membrane churns rather than a
       // spinner appearing somewhere else on the page.
-      if (working) r *= 1 + 0.05 * Math.sin(time * 4.2 + angle * 2);
+      if (working || live.current.thinking) r *= 1 + 0.05 * loose * Math.sin(time * 4.2 + angle * 2);
       for (const pulse of state.current.pulses) {
         const age = time - pulse.t0;
         const d = Math.abs(1 - age * 2.4);
-        if (d < 0.5) r += base * 0.1 * Math.cos(d * Math.PI) * Math.max(0, 1 - age / 1.9);
+        if (d < 0.5) r += base * 0.1 * loose * Math.cos(d * Math.PI) * Math.max(0, 1 - age / 1.9);
+      }
+      if (m > 0.001) {
+        r += (stadiumRadius(angle, pillHalfWidth(width), PILL_HALF_HEIGHT) - r) * m;
       }
       return r;
     }
@@ -109,6 +153,29 @@ export default function Organism({
       s.t += 0.016;
       const t = s.t;
       s.pulses = s.pulses.filter((p) => t - p.t0 < 2);
+
+      const want = live.current;
+      const verdict = want.result;
+      // Exponential approach: fast at first, settling softly, which is the
+      // shape of the --spring curve the rest of the interface uses.
+      const ease = (from, to) => (still ? to : from + (to - from) * 0.085);
+      s.m = ease(s.m, want.shape === "pill" ? 1 : 0);
+      s.reveal = ease(s.reveal, verdict ? 1 : 0);
+      if (verdict && !s.had && !still) s.pulses.push({ t0: t });
+      s.had = Boolean(verdict);
+      if (want.thinking && !still && s.m < 0.3 && t - s.since > 0.7) {
+        s.pulses.push({ t0: t });
+        s.since = t;
+      }
+      const m = s.m;
+      const shown = verdict ? s.reveal : 0;
+      const liked = verdict ? verdict.probability >= 0.5 : false;
+      // The answer's own uncertainty sets how firm the membrane is: a wide
+      // interval wavers, a narrow one holds still.
+      const firm = verdict
+        ? Math.max(0, Math.min(1, 1 - (verdict.high - verdict.low) / 10))
+        : confidence;
+      const tight = confidence + (firm - confidence) * shown;
 
       ctx.clearRect(0, 0, width, height);
       const cx = width / 2;
@@ -141,12 +208,12 @@ export default function Organism({
       ctx.arc(cx, cy, base * 2.6, 0, Math.PI * 2);
       ctx.fill();
 
-      for (const line of reach) {
+      for (const line of m > 0.97 ? [] : reach) {
         const angle = line.a + Math.sin(t * 0.1 + line.p) * 0.05;
-        const far = base * (line.d + Math.sin(t * 0.5 + line.p) * 0.05);
+        const far = base * (line.d + Math.sin(t * 0.5 + line.p) * 0.05) * (1 - m) + base * m;
         const ex = cx + Math.cos(angle) * far;
         const ey = cy + Math.sin(angle) * far;
-        const sr = radiusAt(angle, base, confidence, t);
+        const sr = radiusAt(angle, base, tight, t);
         const sx = cx + Math.cos(angle) * sr;
         const sy = cy + Math.sin(angle) * sr;
         const flow = (Math.sin(t * 0.8 + line.p) + 1) / 2;
@@ -154,26 +221,27 @@ export default function Organism({
         ctx.moveTo(sx, sy);
         ctx.lineTo(ex, ey);
         ctx.lineWidth = 0.8;
-        ctx.strokeStyle = `rgba(255,255,255,${(0.06 + flow * 0.1).toFixed(3)})`;
+        ctx.strokeStyle = `rgba(255,255,255,${((0.06 + flow * 0.1) * (1 - m)).toFixed(3)})`;
         ctx.stroke();
         const travel = (t * 0.35 + line.p) % 1;
         ctx.beginPath();
         ctx.arc(sx + (ex - sx) * travel, sy + (ey - sy) * travel, 1.1, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255,255,255,${(0.5 * (1 - Math.abs(travel - 0.5) * 2) + 0.12).toFixed(3)})`;
+        ctx.fillStyle = `rgba(255,255,255,${((0.5 * (1 - Math.abs(travel - 0.5) * 2) + 0.12) * (1 - m)).toFixed(3)})`;
         ctx.fill();
         ctx.beginPath();
         ctx.arc(ex, ey, line.rated ? 2.6 : 2, 0, Math.PI * 2);
         ctx.fillStyle = line.rated
-          ? "rgba(214,232,150,0.85)"
-          : `rgba(255,255,255,${(0.35 + flow * 0.35).toFixed(3)})`;
+          ? `rgba(${LIME},${(0.85 * (1 - m)).toFixed(3)})`
+          : `rgba(255,255,255,${((0.35 + flow * 0.35) * (1 - m)).toFixed(3)})`;
         ctx.fill();
       }
 
-      const count = 120;
+      // Dense enough that the pill's caps stay round once it has flattened.
+      const count = 360;
       const points = [];
       for (let i = 0; i < count; i += 1) {
         const angle = (i / count) * Math.PI * 2;
-        const r = radiusAt(angle, base, confidence, t);
+        const r = radiusAt(angle, base, tight, t);
         points.push([cx + Math.cos(angle) * r, cy + Math.sin(angle) * r]);
       }
       const trace = () => {
@@ -199,17 +267,37 @@ export default function Organism({
       ctx.fillStyle = body;
       ctx.fill();
 
-      const placed = nodes.map((node) => {
+      if (shown > 0.01) {
+        // Brighter the likelier you are to enjoy it; lime only past even odds.
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, base * 1.05);
+        const tone = liked ? LIME : "255,255,255";
+        glow.addColorStop(0, `rgba(${tone},${(shown * (0.03 + verdict.probability * 0.13)).toFixed(3)})`);
+        glow.addColorStop(1, `rgba(${tone},0)`);
+        trace();
+        ctx.fillStyle = glow;
+        ctx.fill();
+      }
+
+      const band = Math.max(0, pillHalfWidth(width) - PILL_HALF_HEIGHT) * 0.92;
+      const placed = nodes.map((node, i) => {
         const angle = node.a + Math.sin(t * 0.18 * node.w + node.p) * 0.16;
-        const r = radiusAt(angle, base, confidence, t) * node.r;
-        return [cx + Math.cos(angle) * r, cy + Math.sin(angle) * r];
+        const r = radiusAt(angle, base, tight, t) * node.r;
+        const bx = cx + Math.cos(angle) * r;
+        const by = cy + Math.sin(angle) * r;
+        if (m < 0.001) return [bx, by];
+        // In the pill the nodes spread into a low drifting band behind the
+        // text: the same constellation, flattened into a signal line.
+        const px = cx + ((i + 0.5) / nodes.length * 2 - 1) * band + Math.sin(t * 0.3 * node.w + node.p) * 6;
+        const py = cy + Math.sin(t * 0.7 * node.w + node.p) * PILL_HALF_HEIGHT * 0.3;
+        return [bx + (px - bx) * m, by + (py - by) * m];
       });
+      const quiet = 1 - 0.65 * m;
       ctx.lineWidth = 0.6;
       for (let a = 0; a < placed.length; a += 1) {
         for (let b = a + 1; b < placed.length; b += 1) {
           const d = Math.hypot(placed[a][0] - placed[b][0], placed[a][1] - placed[b][1]);
           if (d < base * 0.6) {
-            ctx.strokeStyle = `rgba(255,255,255,${((1 - d / (base * 0.6)) * 0.22).toFixed(3)})`;
+            ctx.strokeStyle = `rgba(255,255,255,${((1 - d / (base * 0.6)) * 0.22 * quiet).toFixed(3)})`;
             ctx.beginPath();
             ctx.moveTo(placed[a][0], placed[a][1]);
             ctx.lineTo(placed[b][0], placed[b][1]);
@@ -218,18 +306,37 @@ export default function Organism({
         }
       }
       placed.forEach((point, i) => {
-        const flicker = 0.4 + 0.6 * Math.abs(Math.sin(t * nodes[i].w + nodes[i].p));
+        const speed = want.thinking ? 3 : 1;
+        const flicker = 0.4 + 0.6 * Math.abs(Math.sin(t * speed * nodes[i].w + nodes[i].p));
         const hot = nodes[i].w > 0.95;
+        const alpha = (hot ? flicker : flicker * 0.45) * quiet;
         ctx.beginPath();
         ctx.arc(point[0], point[1], hot ? 2 : 1.3, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255,255,255,${(hot ? flicker : flicker * 0.45).toFixed(3)})`;
+        ctx.fillStyle =
+          hot && liked && shown > 0.5
+            ? `rgba(${LIME},${alpha.toFixed(3)})`
+            : `rgba(255,255,255,${alpha.toFixed(3)})`;
         ctx.fill();
       });
 
       trace();
       ctx.lineWidth = 1.2;
-      ctx.strokeStyle = `rgba(255,255,255,${(0.22 + confidence * 0.5).toFixed(3)})`;
+      ctx.strokeStyle = `rgba(255,255,255,${(0.22 + tight * 0.5 + m * 0.2).toFixed(3)})`;
       ctx.stroke();
+
+      if (shown > 0.01) {
+        // The score as a ring: a full ring would be ten out of ten.
+        ctx.beginPath();
+        ctx.arc(cx, cy, base * 0.62, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (verdict.score / 10) * shown);
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = liked ? `rgba(${LIME},${(0.75 * shown).toFixed(3)})` : `rgba(255,255,255,${(0.5 * shown).toFixed(3)})`;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, base * 0.62, 0, Math.PI * 2);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(255,255,255,${(0.08 * shown).toFixed(3)})`;
+        ctx.stroke();
+      }
 
       for (const pulse of s.pulses) {
         const age = t - pulse.t0;

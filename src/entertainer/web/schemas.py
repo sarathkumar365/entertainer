@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 VERDICT_HELP = "love | like | ok | meh | dislike | hate | unseen"
@@ -22,6 +24,14 @@ class AddRequest(BaseModel):
     tmdb_id: int
     kind: str = "movie"
     verdict: str | None = None
+
+
+class JudgeRequest(BaseModel):
+    """A catalogue title by ``item_id``, or any title TMDB knows by id."""
+
+    item_id: int | None = None
+    tmdb_id: int | None = None
+    kind: Literal["movie", "tv"] = "movie"
 
 
 class ValidationSealRequest(BaseModel):

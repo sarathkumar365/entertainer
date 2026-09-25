@@ -166,7 +166,13 @@ def search(q: str, limit: int = 12, ctx: AppContext = Depends(get_context)) -> d
     with store.session(read_only=True) as con:
         hits = resolve_search(con, q, limit=limit)
         rows = store.item_rows(con, [h.item_id for h in hits])
-    catalogue = [present(rows[h.item_id]) for h in hits if h.item_id in rows]
+    # tmdb_id rides along so /api/judge can fall back to TMDB for a
+    # catalogue title the item space does not hold.
+    catalogue = [
+        {**present(rows[h.item_id]), "tmdb_id": rows[h.item_id].get("tmdb_id")}
+        for h in hits
+        if h.item_id in rows
+    ]
 
     external: list[dict] = []
     if has_tmdb():

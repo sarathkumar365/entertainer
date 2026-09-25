@@ -14,7 +14,7 @@ says what it is showing you.
 | # | Work | Size |
 | --- | --- | --- |
 | 1 | ~~Taste page, phase one — two sub-tabs, figure as centrepiece, readings reworded~~ | **Done** |
-| 2 | **Will I like it?** — name any title, new releases included, get a prediction | Wiring only: every piece exists |
+| 2 | **Will I like it?** — name any title, new releases included, get a prediction | **Web done** 24 Sep; `ent why` fallback left |
 | 3 | Taste page, phase two — the real map | One new build stage, plus a Canvas/WebGL render layer |
 | 4 | The rest of the unexplained labels | Copy only |
 | 5 | The "close to" claim | Small, but a trust problem |
@@ -60,6 +60,24 @@ item 4:
 > a movie name and it figures out if I will like that movie or not.
 
 Added 24 September 2026 as the immediate next task.
+
+**Status, 24 September 2026: the web half is done.** Home has a "Will I like it?" action. The
+organism flattens into a search box, lists matches when a name is ambiguous, and answers
+with a score, the chance you like it and the 90% range. It was built differently from the
+plan below, on the user's call:
+
+- **Asking writes nothing.** `POST /api/judge` scores a catalogue title directly. A TMDB-only
+  title is encoded, projected and scored in memory; it does not go through `/api/add` and
+  never joins the catalogue. That settles the "joins the catalogue for good" constraint below.
+- Side features for such a title use the catalogue's own scaling (`FeatureSpace.side_for`).
+  Quality comes from the TMDB rating, exactly as `/api/add` would set it; IMDb votes are
+  unknown and sit at neutral. The answer says it was judged on its description and TMDB
+  rating.
+- `/api/predict` and `/api/judge` now return `not_enough_evidence` with fewer than three
+  verdicts.
+
+**Left:** `ent why` falling back to TMDB, and the "close to" titles on the answer (still
+blocked on item 5).
 
 **Nothing does this end to end today.** Every piece exists; none of them are joined:
 
