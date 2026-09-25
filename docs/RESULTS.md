@@ -71,7 +71,7 @@ Relevant means a MovieLens rating of 4.0 or above on the 0.5–5 scale.
 | `content-centroid` | cosine to the mean of liked items | the standard naive personalisation |
 | `weighted-kNN` | rating-weighted item kNN in the fused space | whether the Bayesian model beats a neighbourhood method on the same representation |
 | `ridge` | ridge regression on identical features | the model minus its Bayesian machinery |
-| `entertainer-flat-prior` | the engine with an isotropic prior | the model minus its population knowledge |
+| `entertainer-flat-prior` | the engine with an isotropic prior | the model minus its population knowledge — **removed 25 September 2026**, see below |
 | `entertainer` | the full engine | — |
 
 The last three matter most. Beating `popularity` proves very little; beating
@@ -150,6 +150,15 @@ has not shifted underneath it.
 ---
 
 ## 5. Results
+
+> **The population prior was cut on 25 September 2026**, on the evidence in this
+> section: two consecutive held-out runs put it at or below the arm that omitted
+> it. Every `entertainer-flat-prior` row below therefore describes a variant
+> that no longer exists, and the arm that remains is the one those rows measure.
+> The numbers are kept deliberately — a component removed for a measured reason
+> is a result, and deleting the measurement alongside the code is how the same
+> idea gets re-added in two years with nothing to argue against it.
+
 
 Measured 2026-09-21 against the built catalogue: 73,491 titles, 47.4% with
 genuine MovieLens collaborative factors, 300 held-out users, 30 answered

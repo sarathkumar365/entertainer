@@ -20,7 +20,7 @@ from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold
 
 from entertainer.data.catalog import quality_prior, quality_prior_expr
-from entertainer.models import cf, fusion, population
+from entertainer.models import cf, fusion
 
 
 def _ratings(seed=0, n=4000, users=120, items=90):
@@ -127,73 +127,6 @@ def test_build_matrix_matches_dict_version(signal):
 def test_cf_gpu_env_override(monkeypatch, flag, expected):
     monkeypatch.setenv("ENTERTAINER_CF_GPU", flag)
     assert cf._use_gpu() is expected
-
-
-# --- population prior ---------------------------------------------------------
-
-
-def _old_taste_vectors(df, fs, item_of_movielens):
-    vectors = {}
-    for (uid,), sub in df.group_by(["userId"]):
-        items = sub["movieId"].to_numpy()
-        ratings = sub["rating"].to_numpy().astype(np.float64)
-        rows, keep = [], []
-        for pos, movie in enumerate(items.tolist()):
-            item = item_of_movielens.get(int(movie))
-            if item is not None and item in fs.index:
-                rows.append(fs.index[item])
-                keep.append(pos)
-        if len(rows) < population.MIN_RATINGS:
-            continue
-        y = ratings[keep]
-        if ((y >= population.LIKED_AT).sum() < population.MIN_EACH_SIDE
-                or (y <= population.DISLIKED_AT).sum() < population.MIN_EACH_SIDE):
-            continue
-        X = fs.matrix[np.array(rows)]
-        w = population._user_weight(X, (y - 0.5) / 4.5)
-        norm = np.linalg.norm(w)
-        if norm > 1e-9:
-            vectors[uid] = w / norm
-    return np.vstack([vectors[u] for u in sorted(vectors)])
-
-
-def _population_world(dtype, seed=1):
-    rng = np.random.default_rng(seed)
-    n_items, d = 300, 12
-    matrix = rng.normal(size=(n_items, d)).astype(dtype)
-    # Catalogue has 300 rows; MovieLens knows 260 titles, 240 of them in fs.
-    fs = SimpleNamespace(matrix=matrix, index={i + 1000: i for i in range(240)})
-    item_of_ml = {m: 1000 + m for m in range(260)}
-    lengths = rng.integers(10, 140, size=90)
-    frames = []
-    for u, n in enumerate(lengths):
-        movies = rng.choice(260, size=n, replace=False).astype(np.int32)
-        frames.append(pl.DataFrame({
-            "userId": np.full(n, u * 3 + 1, dtype=np.int32),
-            "movieId": movies,
-            "rating": (rng.integers(1, 11, n) / 2).astype(np.float32),
-        }))
-    df = pl.concat(frames).sample(fraction=1.0, shuffle=True, seed=seed)
-    return df, fs, item_of_ml
-
-
-def test_batched_taste_vectors_match_per_user_loop(monkeypatch):
-    df, fs, item_of_ml = _population_world(np.float64)
-    # Force several chunks so chunk boundaries are exercised.
-    monkeypatch.setattr(population, "_CHUNK_ELEMENTS", 20_000)
-    new = population._taste_vectors(df, fs, item_of_ml)
-    old = _old_taste_vectors(df, fs, item_of_ml)
-    assert new.shape == old.shape
-    assert len(new) > 20
-    assert np.allclose(new, old, atol=1e-8, rtol=0)
-
-
-def test_batched_taste_vectors_close_on_float32_features():
-    """Production features are float32; the batched path solves in float64."""
-    df, fs, item_of_ml = _population_world(np.float32)
-    new = population._taste_vectors(df, fs, item_of_ml)
-    old = _old_taste_vectors(df, fs, item_of_ml)
-    assert np.allclose(new, old, atol=1e-4, rtol=0)
 
 
 # --- fusion ridge map ---------------------------------------------------------

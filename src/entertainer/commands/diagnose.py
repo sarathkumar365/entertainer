@@ -13,7 +13,7 @@ import typer
 from rich.table import Table
 
 from .. import pipeline, store
-from ..config import PATHS, has_tmdb
+from ..config import has_tmdb
 from ..engine import Engine
 from ..errors import IntegrityRefusal
 from ..manifests import write as write_manifest
@@ -32,12 +32,6 @@ def stats() -> None:
     table = Table("component", "state")
     for name, ok in present.items():
         table.add_row(name.replace("_", " "), "[green]ready[/green]" if ok else "[red]missing[/red]")
-    table.add_row(
-        "population prior",
-        "[green]ready[/green]"
-        if (PATHS.artifacts / "population_prior.npz").exists()
-        else "[yellow]absent[/yellow]  [dim]optional: ent data prior[/dim]",
-    )
     table.add_row("tmdb credentials", "[green]set[/green]" if has_tmdb() else "[yellow]absent[/yellow]")
     console.print(table)
 
@@ -200,11 +194,7 @@ def evaluate(
         f"budget {budget} answers[/dim]"
     )
 
-    prior = engine.prior()
-    if prior is None:
-        console.print("[yellow]no population prior fitted — run `ent data prior`[/yellow]")
-
-    results = run(fs, meta, histories, cfg, elicitation=elicitation, prior=prior)
+    results = run(fs, meta, histories, cfg, elicitation=elicitation)
     evaluation_manifest = write_manifest(
         "offline-evaluation",
         {

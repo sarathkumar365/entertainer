@@ -48,7 +48,6 @@ def _space():
     np.save(PATHS.embeddings / "content_ids.npy", np.arange(N, dtype=np.int32))
     np.save(PATHS.embeddings / "content.npy", np.zeros((N, 8), dtype=np.float32))
     np.savez(PATHS.embeddings / "fused.npz", item_ids=np.arange(N))
-    np.savez(PATHS.artifacts / "population_prior.npz", mean=np.zeros(4))
 
 
 def _source(tmp_path, monkeypatch, name="source") -> Path:
@@ -89,7 +88,7 @@ def test_manifest_v2_round_trips(tmp_path, monkeypatch):
     assert "imdb_id" in m["titles_columns"] and "keywords_at" in m["titles_columns"]
     assert m["encoder"]["dim"] == 8
     assert set(m["sha256"]) == set(m["contents"]) == {
-        "titles.parquet", "fused.npz", "population_prior.npz", "content.npy", "content_ids.npy"
+        "titles.parquet", "fused.npz", "content.npy", "content_ids.npy"
     }
 
     _use(tmp_path, monkeypatch, "target")

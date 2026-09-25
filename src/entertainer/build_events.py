@@ -28,7 +28,6 @@ STAGES = (
     ("embeddings", "Turning title text into signals"),
     ("cf", "Learning audience patterns"),
     ("fusion", "Fusing movie signals"),
-    ("prior", "Learning a cautious starting point"),
 )
 HEARTBEAT_SECONDS = 10
 STALE_SECONDS = HEARTBEAT_SECONDS * 3

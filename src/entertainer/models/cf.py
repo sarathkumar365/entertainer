@@ -63,9 +63,9 @@ _RATINGS_SCHEMA = {"userId": pl.Int32, "movieId": pl.Int32, "rating": pl.Float32
 def load_ratings() -> pl.DataFrame:
     """MovieLens ratings as (userId Int32, movieId Int32, rating Float32).
 
-    Parsing the 836 MB CSV costs tens of seconds and `data cf`, `data prior`
-    and the offline simulation each need it, so the first read leaves a
-    sibling parquet behind. It is rebuilt whenever the CSV changes.
+    Parsing the 836 MB CSV costs tens of seconds and both `data cf` and the
+    offline simulation need it, so the first read leaves a sibling parquet
+    behind. It is rebuilt whenever the CSV changes.
     """
     path = _ratings_path()
     cache = path.with_suffix(".parquet")

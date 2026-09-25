@@ -32,7 +32,7 @@ good recommendations out of very few ratings. Item 14 is what the whole thing is
 | 9 | Release publish / pull — switch it on | Configuration only |
 | 10 | **Unblock the two measurements that answer "is it learning me"** | Small, and nothing above it moves this |
 | 11 | Feed it properly — volume, real dislikes, and rating where it counts | No code; a habit and one nudge in the UI |
-| 12 | Decide the fate of the parts that are not paying | A decision, not a build |
+| 12 | ~~Cut the population prior~~ — the Bayesian-vs-ridge call stays open | **Prior removed** 25 Sep; ridge call blocked on item 11 |
 | 13 | Work from very few ratings — the research directions | The core bet; unscoped |
 | 14 | The agent — new releases, judged, acquired, ready to watch | Part two of the README; nothing built |
 
@@ -567,11 +567,19 @@ omits it, and its original justification — a synthetic n=4 result of +0.46 cor
 described in RESULTS.md as having "measured a world that was too easy". There is no evidence
 left supporting it.
 
-Removing it touches: the `prior` build stage in `build_events.STAGES`, the artefact
-`data/artifacts/population_prior.npz`, the `entertainer-flat-prior` benchmark arm (which
-becomes simply `entertainer`), `models/population.py`, and the README section "3b. The prior
-knows what taste looks like". The block-diagonal reparameterisation in the taste fit goes with
-it.
+**Done, 25 September 2026.** Removed across fourteen files: `models/population.py` and its
+tests deleted, the `prior` build stage gone so a full build is seven stages rather than eight,
+`ent data prior` gone, the block-diagonal reparameterisation and its `alpha_anchor` hyperprior
+out of `models/taste.py`, `Engine.prior()` gone, the `entertainer-flat-prior` benchmark arm
+gone along with `simulate._ACTIVE_PRIOR`, `population_prior.npz` out of the bundle's `SPACE`
+and out of the build manifest, and README section 3b deleted.
+
+**The published bundle still imports.** `build-20260925-1806` was already on the releases
+repository, and its manifest lists `population_prior.npz` with a checksum. `bundle.verify`
+walks the *manifest's* checksum list rather than this code's `SPACE` tuple, so the file is
+still verified on the way in; the restore loop then simply does not copy it out. No re-publish
+is needed, and a regression test in `tests/test_bundle.py` rebuilds exactly that archive shape
+and asserts it restores.
 
 Keep the *evidence* in `docs/RESULTS.md`. A component removed for a measured reason is a
 result, and deleting the reason alongside the code is how a project re-adds the same idea two

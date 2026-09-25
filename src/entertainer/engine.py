@@ -24,7 +24,6 @@ from .errors import ModelNotReady
 from .models import fusion
 from .models.features import FeatureSpace
 from .models.features import build as build_features
-from .models.population import PopulationPrior
 from .models.taste import TasteModel, verdict_to_reward
 from .models.taste import fit as fit_taste
 
@@ -68,8 +67,6 @@ _LEAN_COLUMNS = (
 class Engine:
     _meta: dict[int, dict] | None = field(default=None, repr=False)
     _fs: FeatureSpace | None = field(default=None, repr=False)
-    _prior: PopulationPrior | None = field(default=None, repr=False)
-    _prior_loaded: bool = field(default=False, repr=False)
 
     # --- catalogue ---------------------------------------------------------
 
@@ -98,27 +95,6 @@ class Engine:
         art = fusion.load()
         self._fs = build_features(art.item_ids, art.space, self.meta(con))
         return self._fs
-
-    def prior(self, con=None) -> PopulationPrior | None:
-        """The population prior, if one has been fitted.
-
-        Optional by design: the engine works without it, just worse for the
-        first couple of dozen verdicts. A prior whose dimension no longer
-        matches the item space is silently ignored rather than crashing,
-        because that only happens when the space has been rebuilt and the
-        right response is to refit it, not to refuse to recommend anything.
-        """
-        if self._prior_loaded:
-            return self._prior
-        self._prior_loaded = True
-        if PopulationPrior.exists():
-            candidate = PopulationPrior.load()
-            expected = self.features(con).matrix.shape[1]
-            if candidate.dim == expected:
-                self._prior = candidate
-            else:
-                self._prior = None
-        return self._prior
 
     # --- labels ------------------------------------------------------------
 
@@ -194,7 +170,7 @@ class Engine:
             )
 
         model = fit_taste(
-            X, rewards, sample_weight=weights, prior=self.prior(con),
+            X, rewards, sample_weight=weights,
             capacity_obs=real_labels,
         )
         if save:

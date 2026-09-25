@@ -63,9 +63,6 @@ That is expected.
 7. **Fusing the item space.** Combines the "feel from the plot" numbers and
    the "people like me" numbers into one map. Every title gets a position;
    titles close together are ones you would probably feel the same about.
-8. **Learning the population prior.** Learns what typical human taste looks
-   like, so that with only a handful of your ratings the model makes
-   sensible guesses rather than random ones.
 
 When it prints `ready`, run `./scripts/entertainer start`. From then on,
 your taste is simply your ratings measured against that map, recalculated
@@ -87,8 +84,8 @@ It is worth separating these before anything else, because “the model” means
 different things in this system and they behave nothing alike.
 
 **Catalogue learning — slow, shared, and identical for everybody.** Turning film
-text into vectors, factorising MovieLens, fusing the two spaces, fitting the
-population prior. This is the two-and-a-half-hour build. It knows nothing about
+text into vectors, factorising MovieLens, fusing the two spaces. This is the
+two-and-a-half-hour build. It knows nothing about
 you. It learns what films *are* and how audiences *in general* move between
 them. Two people running Entertainer have exactly the same catalogue model — and
 that is why one machine can build it and others can simply pull the result.
@@ -103,8 +100,9 @@ before you saw it, and every verdict you give is reflected in the very next one.
 Three consequences worth knowing:
 
 - **Three verdicts is the threshold.** Below that, `engine.fit` returns nothing
-  and the population prior carries your recommendations on its own. This is why
-  a brand-new profile still produces a sensible first screen instead of noise.
+  and the first screen is built from consensus quality, balanced across
+  languages, rather than from anything about you. That is why a brand-new
+  profile still produces something sensible instead of noise.
 - **Old verdicts fade rather than expire.** Weights decay on a half-life of
   1,100 days — about three years. A film you loved last month counts for more
   than one you loved in 2022, but nothing is ever forgotten outright.
@@ -190,7 +188,7 @@ There are two different moments in the system's life, and separating them
 prevents a lot of confusion.
 
 The first is the **heavy build**. It constructs the shared film map: catalogue,
-embeddings, MovieLens collaboration, fusion, and the optional starting prior.
+embeddings, MovieLens collaboration, and fusion.
 It can take a long time, but it is resumable. The second is **using the app**.
 Once the map exists, the app reads your local rating history and quickly refits
 your small personal model whenever it needs a fresh recommendation. It does not
@@ -293,7 +291,6 @@ A few protections make that fit behave sensibly:
 - Recent ratings count a little more, with a 1,100-day half-life. Old opinions still matter, but cannot freeze your taste forever.
 - Skips are weak negative evidence: “not tonight” is not “bad.”
 - The model adds 1,000 weak, deterministic samples from unseen titles. This gives contrast to a history full of films you chose to watch, without pretending unseen titles are explicit dislikes.
-- A MovieLens-derived population prior makes the first few ratings less random. As your own evidence grows, its influence fades.
 - A random-Fourier-feature lift can add gentle non-linearity, but only when marginal likelihood says the real number of ratings supports extra complexity.
 
 That final guardrail is important. The project does not assume the more complex model is better; plain ridge remains a serious competing model.
@@ -339,7 +336,7 @@ Because the prediction is sealed first, it cannot improve after seeing the answe
 
 The main product metric is **Top-10 hit rate**: among the films a model ranked highest, how often did you actually like them? The report also includes ranking quality (NDCG@10 and precision@10), score error (MAE/RMSE), calibration, and Brier score. Every personal result includes a 95% confidence interval.
 
-Thirty completed hidden-pool outcomes are called preliminary, never trusted. At 100 outcomes, the full model stays only if its paired confidence interval proves a positive Top-10 lift over ridge. If it cannot, the complex population-prior and RFF path should be archived and ridge should serve the same interface instead. That is the system choosing evidence over complexity.
+Thirty completed hidden-pool outcomes are called preliminary, never trusted. At 100 outcomes, the full model stays only if its paired confidence interval proves a positive Top-10 lift over ridge. If it cannot, the RFF path should be archived and ridge should serve the same interface instead. That is the system choosing evidence over complexity.
 
 ## The entire build story, condensed
 

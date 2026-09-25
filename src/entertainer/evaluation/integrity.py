@@ -1,9 +1,10 @@
 """The holdout contract.
 
 An offline benchmark is only honest if the users being replayed were never
-seen by the model replaying them. The population prior is fitted on
-MovieLens; the benchmark replays MovieLens users; so a prior fitted without
-withholding anyone has already read the answers.
+seen by the model replaying them. The collaborative factors are fitted on
+MovieLens; the benchmark replays MovieLens users and ranks in the space those
+factors build; so a factorisation fitted without withholding anyone has
+already read the answers.
 
 Both halves of that contract lived in cli.py, about 1100 lines apart: `ent
 data cf` chose the held-out users and wrote them to disk, and `ent eval`

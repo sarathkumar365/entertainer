@@ -20,7 +20,6 @@ from rich.panel import Panel
 from .. import pipeline, resources, store
 from ..build_events import Reporter
 from ..config import PATHS, has_tmdb
-from ..engine import Engine
 from ..manifests import write as write_manifest
 from ..pipeline import preflight as pipeline_preflight
 from ..render import console, tables
@@ -66,7 +65,7 @@ def setup(
         "ENTERTAINER_MEMORY_FRACTION).",
     ),
 ) -> None:
-    """Run everything: download, build, enrich, prune, embed, factorise, fuse, prior."""
+    """Run everything: download, build, enrich, prune, embed, factorise, fuse."""
     from ..data import catalog, download
 
     if memory_fraction is not None:
@@ -95,7 +94,7 @@ def setup(
     })
     console.print(f"[dim]preflight passed: {info['free_bytes'] / 1024**3:.1f} GiB free; "
                   f"planning within {mem.describe()}[/dim]")
-    console.rule("[bold]1/8 downloading source data")
+    console.rule("[bold]1/7 downloading source data")
     with reporter.stage("sources"):
         download.fetch_sources()
 
@@ -134,23 +133,18 @@ def setup(
         raise
 
     if cf_current:
-        console.rule("[bold]6/8 factorisation unchanged — reusing it")
+        console.rule("[bold]6/7 factorisation unchanged — reusing it")
     elif jobs:
-        console.rule("[bold]6/8 waiting for the background factorisation")
+        console.rule("[bold]6/7 waiting for the background factorisation")
         jobs[0].wait()
     else:
-        console.rule("[bold]6/8 factorising MovieLens")
+        console.rule("[bold]6/7 factorising MovieLens")
         with reporter.stage("cf"):
             _factorise(cf_kwargs, pipeline.cf_inputs(settings))
 
-    console.rule("[bold]7/8 fusing item space")
+    console.rule("[bold]7/7 fusing item space")
     with reporter.stage("fusion"):
         data_fuse(dim=settings.fusion_dim)
-    console.rule("[bold]8/8 learning the population prior")
-    with reporter.stage("prior"):
-        data_prior(
-            max_users=settings.prior_max_users, shrinkage=settings.prior_shrinkage
-        )
 
     with store.session(read_only=True) as con:
         counts = store.counts(con)
@@ -182,17 +176,17 @@ def _foreground_stages(
         built_from = store.get_meta(con, pipeline.CATALOGUE_INPUTS_KEY)
         has_titles = con.execute("SELECT count(*) FROM titles").fetchone()[0] > 0
     if not settings.force and has_titles and built_from == fingerprint:
-        console.rule("[bold]2/8 catalogue unchanged — reusing it")
+        console.rule("[bold]2/7 catalogue unchanged — reusing it")
         reporter.skip("catalogue", "IMDb, MovieLens links and settings unchanged since the last build")
     else:
-        console.rule("[bold]2/8 building catalogue")
+        console.rule("[bold]2/7 building catalogue")
         with reporter.stage("catalogue"):
             n = catalog.build_base(min_votes=settings.min_votes)
         console.print(f"[green]{n:,} titles[/green]")
     after_catalogue()
 
     if not settings.skip_enrich and has_tmdb():
-        console.rule("[bold]3/8 enriching from TMDB")
+        console.rule("[bold]3/7 enriching from TMDB")
         with reporter.stage("tmdb"):
             # Two passes share one stage, so each reports its own half of it.
             enrich_titles(
@@ -208,13 +202,13 @@ def _foreground_stages(
                 progress=_watch(reporter, "tmdb", part=1, parts=2),
             )
     else:
-        console.rule("[bold]3/8 TMDB enrichment skipped")
+        console.rule("[bold]3/7 TMDB enrichment skipped")
         reporter.skip("tmdb", "disabled by --skip-enrich or no TMDB credentials")
 
-    console.rule("[bold]4/8 pruning by language")
+    console.rule("[bold]4/7 pruning by language")
     with reporter.stage("prune"):
         data_prune(scale=settings.floor_scale, dry_run=False)
-    console.rule("[bold]5/8 encoding item text")
+    console.rule("[bold]5/7 encoding item text")
     with reporter.stage("embeddings"):
         encode_catalogue(
             batch_size=settings.encode_batch,
@@ -534,43 +528,6 @@ def data_cf(
     if held is not None:
         integrity.save_holdout(held)
     console.print(f"[green]CF factors: {item_factors.shape}[/green]")
-
-
-@data_app.command("prior")
-def data_prior(
-    max_users: int = typer.Option(20_000, help="MovieLens users to fit taste vectors for."),
-    shrinkage: float = typer.Option(0.15, help="Pull the covariance towards a scaled identity."),
-) -> None:
-    """Learn what human taste vectors look like, to use as the cold-start prior."""
-
-    from ..evaluation import integrity
-    from ..models import fusion
-    from ..models.population import fit as fit_prior
-
-    if not fusion.exists():
-        _fail("no fused item space — run `ent data fuse` first")
-
-    engine = Engine()
-    with store.session(read_only=True) as con:
-        fs = engine.features(con)
-        ml = dict(
-            con.execute(
-                "SELECT movielens_id, item_id FROM titles WHERE movielens_id IS NOT NULL"
-            ).fetchall()
-        )
-    item_of_ml = {int(k): int(v) for k, v in ml.items() if int(v) in fs.index}
-    if not item_of_ml:
-        _fail("no MovieLens identities in the catalogue — rebuild after downloading ml-32m")
-
-    held = integrity.load_holdout()
-
-    prior = fit_prior(fs, item_of_ml, holdout_users=held, max_users=max_users,
-                      shrinkage=shrinkage)
-    prior.save()
-    console.print(
-        f"[green]population prior from {prior.n_users:,} users[/green] "
-        f"({prior.dim} dimensions)"
-    )
 
 
 @data_app.command("fuse")
