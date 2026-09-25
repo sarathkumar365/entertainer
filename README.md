@@ -1,19 +1,31 @@
 # entertainer
 
-A personal recommendation engine for film and television that learns what you
-like from **titles and verdicts alone** — no genres, no tags, no explaining
-yourself — across English, Malayalam, Tamil, Telugu, Kannada, Korean,
-Japanese, European and other catalogues.
+Nobody should spend thirty minutes deciding what to watch.
 
-> **New here?** Read [How Entertainer learns your taste](docs/HOW_IT_WORKS.md)
-> for a plain-English tour of the data, model, predictions, and evaluation
-> process. It is the best place to start before the technical details below.
+That is the whole problem. On a Friday evening the cost of finding a good film
+is frequently higher than the cost of watching a mediocre one, so people watch
+the mediocre one. Entertainer is built to remove that half hour entirely: by
+the time you sit down, something you will actually like should already be
+waiting.
+
+It has two halves.
+
+**The engine** learns what you like from titles and verdicts alone — no genres,
+no tags, no explaining yourself — across English, Malayalam, Tamil, Telugu,
+Kannada, Korean, Japanese, European and other catalogues. It answers two
+questions:
 
 ```bash
-ent loved "Kumbalangi Nights"
-ent hated  "Morbius"
-ent recs --lang ml,ta --movies
+ent recs                           # what should I watch?
+ent why "Kumbalangi Nights"        # would I like this one?
 ```
+
+**The agent** acts on those answers without being asked. It watches for new
+releases, puts each one to the engine, and for the ones the engine says you
+will like, gets them into your Jellyfin library. You come home; it is there.
+
+The second half is not built yet. The first half is built and works, with
+the honest caveats in [Does it work?](#does-it-work) below.
 
 It runs entirely on your machine. Your taste data never leaves it.
 
@@ -23,23 +35,53 @@ It runs entirely on your machine. Your taste data never leaves it.
 
 Most recommenders ask you to describe yourself: pick your genres, rate these
 sliders, choose your moods. That fails because the things that decide whether
-you like a film are not in any tag vocabulary. Nobody has ever liked a film
-*because* it was tagged `Drama`. They liked it because of its pace, its
-restraint, the way it refused to explain itself, a particular actor's
-stillness — and they usually could not have told you that in advance.
+you like a film are not in any tag vocabulary.
 
-So this engine never asks. It takes the only input people are reliable about —
-*I loved that one, I couldn't finish that one* — and works backwards to the
-structure underneath. The reasons are **discovered**, not declared.
+Nobody has ever liked a film *because* it was tagged `Drama`. What actually
+decides it is closer to **craft** than to subject:
+
+- whether it takes hold in the first ten minutes, or asks for patience first
+- how it is shot, cut and paced
+- the performances, the score, the restraint or the lack of it
+- whether it explains itself or trusts you
+
+**Thallumaala** has no story worth summarising. It is wonderful anyway, because
+of how it is made. **Avatar** is the same trade at a hundred times the budget.
+A recommender reasoning about plot and genre cannot explain either one, and
+will mis-serve anyone whose taste runs on execution rather than premise.
+
+People usually cannot state these preferences in advance, which is why asking
+is useless. So this engine never asks. It takes the only input people are
+reliable about — *I loved that one, I couldn't finish that one* — and works
+backwards to the structure underneath. The reasons are **discovered**, not
+declared.
 
 Genres and keywords do appear in the system, but only in two places: buried
 inside the text an encoder reads, where the model is free to ignore them, and
 at the very end, as vocabulary for *describing* what was discovered. They
 never constrain what can be learned.
 
+### The hard constraint: this must work from very few ratings
+
+A person might label two hundred films in a year, and will lose patience long
+before that. A system that only becomes good at five hundred verdicts has
+already failed, because nobody will reach five hundred.
+
+So "works from minimal data" is not a nice-to-have here, it is the defining
+constraint, and it rules out most of the recommender literature — which earns
+its results from millions of users and billions of interactions. Everything in
+the design below follows from it: a closed-form model that cannot overfit two
+hundred points, a prior that already knows the shape of human taste, questions
+chosen to extract the most information per answer, and calibrated uncertainty
+so the system can tell the difference between *you will like this* and *I have
+no idea*.
+
+Whether the current build clears that bar is an open question, answered
+honestly in [Does it work?](#does-it-work).
+
 ---
 
-## How it works
+## Part one — the engine
 
 ```
 IMDb bulk dumps ─┐
@@ -209,6 +251,66 @@ of them; which ones turn out to matter is an empirical fact about you.
 
 ---
 
+## Part two — the agent
+
+**Status: not built.** This section is the specification, not a description of
+something that runs today. It is written down because the engine's design only
+makes sense in light of what it is for.
+
+A recommendation you have to act on is still homework. The list is good, and
+then you still have to find the film, and by the time you have, the evening is
+half gone. The agent closes that gap: it turns *what to watch* into *what is
+ready to watch*.
+
+```
+          new releases ──> the engine ──> "would he like this?"
+                                                │
+                                        yes ────┤──── no ──> ignored
+                                                │
+                                          acquire it
+                                                │
+                                        Jellyfin library
+                                                │
+                                      you sit down, it is there
+```
+
+### What it does
+
+1. **Watches for what is new.** Recent releases, and new arrivals on the
+   streaming services — but not only those. A film from 1994 you have never
+   seen is as good an answer to "what should I watch tonight" as one from last
+   month, so the agent considers the back catalogue too.
+2. **Asks the engine.** Every candidate goes through the same prediction path
+   as `POST /api/judge` — score, probability you like it, and the confidence
+   interval around both.
+3. **Decides.** Only titles above a confidence threshold are acted on. The
+   agent should be conservative: a wrong pick costs disk and trust, and the
+   engine's calibrated intervals exist precisely so that "I am not sure" is a
+   usable answer rather than a silent guess.
+4. **Makes it ready.** The chosen title is placed into the Jellyfin library on
+   the home server, so it is playable when you want it rather than queued for
+   a decision you have to make later.
+5. **Learns from the outcome.** Whether you watched it, finished it, or
+   ignored it is signal, and it should feed back as a verdict. This matters
+   more than it sounds: it is the only source of ratings that costs the user
+   nothing, which directly attacks the "works from very few ratings"
+   constraint above.
+
+### Open questions, recorded rather than answered
+
+- **Where titles are acquired from is not settled.** Whatever the agent does
+  here must respect what you are actually licensed to hold. This is a
+  deliberate gap in the specification, not an oversight, and it is the one
+  decision that should be made explicitly rather than inherited from whatever
+  library happens to be convenient.
+- **Sharing.** A Jellyfin server can serve several people, but the `events`
+  table has no user column — one install is one person's taste. Several people
+  on one server is a schema change, and nothing today is built for it.
+- **Disk.** An agent that acts unsupervised needs a budget and an eviction
+  rule, or it fills the disk with films you never got round to.
+
+---
+
 ## Does it work?
 
 `ent eval` answers this without waiting months for your own history to
@@ -247,6 +349,30 @@ Two earlier runs looked better and were wrong — one measured a degenerate
 fit, the other measured handicapped baselines. Both are kept in the results
 document, because the flattering run is the one that would otherwise have
 been quoted.
+
+### And on a real person?
+
+`ent audit` is the measurement that actually matters, because replaying
+strangers says the method is sound without saying the engine is useful to the
+person holding it. On 186 real verdicts it reports mean absolute error of
+1.84/10 against a running-average control of 1.79 — **the model does not yet
+beat predicting your own average.**
+
+Interval coverage is the one thing that clearly works: 0.87 against a nominal
+0.90. When the engine says it is confident, it is right about being confident,
+and that is what the exploration policy and the agent's accept/reject decision
+both rest on.
+
+The reported learning trend is currently unreadable rather than bad. The first
+seventeen verdicts in the log all carry the same value, so the model predicts a
+constant and scores a perfect zero error on a window with no variance to miss;
+the apparent decline afterwards is the log becoming testable, not the model
+becoming worse. That is a measurement bug, and it is
+[recorded as one](docs/BACKLOG.md).
+
+The honest summary is **not enough evidence**, not **it failed**. 186 verdicts
+at 82% positive is below the threshold where the low-data thesis can be tested
+at all.
 
 ---
 
@@ -500,6 +626,20 @@ sequence modelling over enormous interaction logs. Here there is one user and
 no reliable consumption timestamps, so that advantage does not exist, while
 the costs — compute, opacity, and an inability to say how confident it is —
 all do. Using them here would be cargo-culting scale.
+
+**What would make this work from fewer ratings?** The open question, and the
+one the project is actually judged on. Three directions are on the table, none
+of them yet built: extracting *craft* attributes — pacing, how it is shot, how
+much patience it asks for — from reviews and synopses with a language model, so
+a verdict teaches the system about qualities rather than about one title;
+asking for pairwise comparisons instead of ratings, which carries more signal
+per unit of patience; and maintaining a written natural-language taste profile
+alongside the vector, which generalises from a handful of examples in a way a
+192-dimensional regression cannot. The literature is clear that language models
+under-perform trained recommenders where interaction data is plentiful, and
+equally clear that the ranking reverses in the cold-start regime — which is the
+only regime this project ever operates in. Options and citations are in
+[`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 **Why is the event log the source of truth?** The model is a pure function of
 your verdicts, refitted from scratch on every command. It costs milliseconds

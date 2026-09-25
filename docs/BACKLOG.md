@@ -1,15 +1,23 @@
 # Backlog
 
 Captured from a live walkthrough of the running app on 23 September 2026, then extended with
-what measuring that day's full build turned up.
+what measuring that day's full build turned up. Items 10 to 14 were added on 25 September 2026
+from two further sources: running `ent audit` against the real event log rather than the
+MovieLens replay, and a restatement of what the platform is for — now in the README as
+"Part one — the engine" and "Part two — the agent".
 
 **Ordered by the order of work, not by the order the pages were visited.** Start at the top.
 
 A rendered version lives at
 <https://claude.ai/code/artifact/8d510bb5-0de6-4127-a218-6c796a60f95d>.
 
-The recommendations themselves are good. Almost every problem below is that the screen never
-says what it is showing you.
+Items 1 to 9 are interface problems: the recommendations themselves are good, and almost every
+complaint is that the screen never says what it is showing you. Items 10 to 14 are not.
+
+Items 10 to 12 are about whether the engine can be shown to work for the person using it,
+which as of 25 September 2026 it cannot — not because it failed, but because the measurement
+is unreadable and the log is too thin to read. Item 13 is the project's actual bet: getting
+good recommendations out of very few ratings. Item 14 is what the whole thing is for.
 
 | # | Work | Size |
 | --- | --- | --- |
@@ -22,6 +30,11 @@ says what it is showing you.
 | 7 | Build pipeline — downloads, then TMDB caching | Biggest time savings in the project |
 | 8 | Library — grid view, legible sizes, verify Saved | Mechanical |
 | 9 | Release publish / pull — switch it on | Configuration only |
+| 10 | **Unblock the two measurements that answer "is it learning me"** | Small, and nothing above it moves this |
+| 11 | Feed it properly — volume, real dislikes, and rating where it counts | No code; a habit and one nudge in the UI |
+| 12 | Decide the fate of the parts that are not paying | A decision, not a build |
+| 13 | Work from very few ratings — the research directions | The core bet; unscoped |
+| 14 | The agent — new releases, judged, acquired, ready to watch | Part two of the README; nothing built |
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
 
@@ -362,6 +375,364 @@ today is built for it.
 
 How the personal model trains is documented in
 [HOW_IT_WORKS.md](HOW_IT_WORKS.md#two-kinds-of-learning).
+
+---
+
+## 10. Unblock the two measurements that answer "is it learning me"
+
+Added 25 September 2026, from running `ent audit` against the live event log rather than
+against the MovieLens replay.
+
+Every other item on this list is copy, layout or build speed. None of them move the only
+question the project exists to answer. This one does, and it is small.
+
+### What `ent audit` says today
+
+186 verdicts, 25 September 2026:
+
+| measure | value | reading |
+| --- | --- | --- |
+| mean absolute error | 1.84 / 10 | lower is better |
+| vs running-average baseline | 1.79 / 10 | **model loses** |
+| error: first vs last | 0.00 → 1.95 | flat or worse |
+| learning slope | +0.059 per 100 verdicts | p=0.039 |
+| 90% interval coverage | 0.87 | calibrated |
+| rank correlation | +0.130 | p=0.0806 |
+
+Read at face value that says the engine gets *worse* as it learns, significantly. It does not
+say that, for the reason below — but the MAE line does not depend on ordering and does stand:
+on this log the model does not beat predicting the user's own average.
+
+### The confound: the log is two instruments glued end to end
+
+`events` holds two populations that do not interleave at all.
+
+| source | n | timestamp range | values present |
+| --- | --- | --- | --- |
+| `netflix` | 84 | 2025-06-19 → 2026-09-18 | `1.0`, `7.5`, `10.0` |
+| `web` | 108 | 2026-09-21 → 2026-09-25 | `1.0`, `4.0`, `7.5`, `10.0` |
+
+**Settled, 25 September 2026: a Netflix verdict is a web verdict.** The import exists so the
+user does not have to re-click ratings he has already given; the intent was always "treat
+these as though I clicked them here". So `source` is provenance only. Nothing downstream may
+branch on it, and there is no second pipeline to build or reconcile.
+
+That resolves the framing but not the bug. The real cause is narrower, and confirmed by
+reading the log:
+
+```
+first 20 verdicts, in ts order:
+7.5 7.5 7.5 7.5 7.5 7.5 7.5 7.5 7.5 7.5
+7.5 7.5 7.5 7.5 7.5 7.5 7.5 10.0 7.5 7.5
+```
+
+The first seventeen verdicts all carry the same value. `prequential.run` starts predicting at
+`MIN_TRAIN = 5`, so the first ten predictions are made by a model fitted on a constant, asked
+to predict that same constant. It scores exactly `0.00` — not accuracy, an absence of variance
+to be wrong about.
+
+`trend()` then compares that window against the last ten, which do have spread, and
+`learning_slope()` regresses raw absolute error against step count across the whole run. Both
+therefore measure **how varied the labels happened to be at each point in the log**, and only
+incidentally the model. The audit code itself was verified and is honest — it refits on
+everything before each verdict and predicts blind, with no leakage. The inputs are what make
+the trend meaningless.
+
+### The work
+
+- **Measure skill, not error.** Report the trend on `baseline_error - model_error` rather than
+  on `absolute_error`. The running-average control faces exactly the same label variance at
+  every step, so the difference is immune to the problem above while a raw error curve is not.
+  Touches `learning_slope()` and `trend()` in `evaluation/prequential.py`.
+- **Refuse to report a trend on a degenerate window.** If a window has near-zero variance in
+  `actual`, the error over it carries no information; say so instead of printing `0.00` beside
+  the word "improving". Same file, plus the rendering in `commands/diagnose.py`.
+- **Leave `source` alone.** It stays as provenance. Do not branch on it, do not weight by it,
+  do not split the audit by it — per the decision above.
+- **Unblock the off-policy estimate.** It needs 30 recommendations with an outcome and has 16.
+  Only verdicts given from `/recs` produce one. Until then the measurement that would test the
+  engine where its uncertainty is actually actionable cannot run at all — which is precisely
+  the defence RESULTS.md offers for the Bayesian machinery being level with ridge.
+
+### Why this matters more than its size
+
+`docs/RESULTS.md` says the offline replay "says nothing about whether the engine is good for
+the person who built it", and that the measurement that matters is `ent audit` on a real
+verdict log. That log now exists. It is currently unreadable for the reason above, and it is
+also still thin: n=186, 82% positive, with the negative examples arriving almost entirely from
+one import.
+
+That is below the threshold where the thesis can be tested at all — the README puts the point
+where curvature starts paying at "a couple of hundred". So the honest standing is **not enough
+evidence**, not **it failed**. Fixing the instrument split is what makes the difference
+between those two readings visible as the log grows.
+
+---
+
+## 11. Feed it properly — and rate where it counts
+
+Added 25 September 2026, alongside item 10. That item covers the measurement being
+*unreadable*; this one covers the log being *thin*. They are separate problems and fixing
+either alone leaves the question open.
+
+### The state of the log
+
+192 rate events on 25 September 2026:
+
+| value | meaning | n |
+| --- | --- | --- |
+| `10.0` | loved | 59 |
+| `7.5` | liked | 99 |
+| `4.0` | disliked | 13 |
+| `1.0` | hated | 21 |
+
+**82% positive.** The model has seen a great deal of "this is for me" and very little of the
+opposite, and 10 of the 21 hated verdicts arrived in a single Netflix import rather than from
+deliberate rating. A preference model learns a boundary; it is currently being shown one side
+of it.
+
+This is the same shape as the finding in LEARNINGS.md — "a preference model trained only on
+things the user rated has never seen *not for me*" — which is why sampled negatives exist and
+why they are worth +0.1828 NDCG. Sampled negatives are a stand-in for real ones. Real ones are
+better.
+
+### Where a verdict is given changes what it is worth
+
+This is not obvious from any screen, and it is the single least-known fact about the system:
+
+| Given from | Trains the model | Produces an off-policy outcome |
+| --- | --- | --- |
+| `/recs` | yes | **yes** |
+| `/rate` | yes | no |
+| `ent loved` etc. | yes | no |
+| Netflix import | yes | no |
+
+Only `/recs` logs the propensity a title had of being shown, so only a verdict given there can
+answer "were those slates any good?". The off-policy estimate needs 30 such outcomes and has
+**16**. Two hundred verdicts given on `/rate` move that counter by zero.
+
+`README.md` states this correctly under "The interface". Nothing in the running app does.
+
+### The work
+
+- **Say it in the app.** `/recs` should carry one line making the point — rating here is worth
+  more than rating elsewhere, because it is the only place that measures whether the picks
+  were good. Copy only.
+- **Show the counter.** The Evidence page already says "16 of 30 recommendations have an
+  outcome" and item 4 flags that string as unreadable. Rewriting it is the natural place to
+  say what closes the gap.
+- **Rate 14 or more from `/recs`.** Not code. It is the smallest action in this document with
+  the largest unlock: it is what lets the off-policy check run at all, and that check is the
+  only measurement that tests the model where its uncertainty is actionable.
+- **Then bulk toward roughly 400 verdicts, leaning on dislikes.** `ent bulk` takes a file of
+  `title | verdict` lines, which is the fastest route for titles already known to be
+  disliked. The target is a less lopsided log, not a bigger one.
+
+### What this does not fix
+
+Worth stating so the items are not conflated. More verdicts do **not** repair item 10's
+instrument split — that is a code change, and more data buries the confound rather than
+dissolving it. They do **not** touch item 5's "close to" claim, which is a threshold and a
+label. They will not move the offline benchmark in `docs/RESULTS.md` at all, since that
+replays MovieLens strangers and never sees this log.
+
+---
+
+## 12. Decide the fate of the parts that are not paying
+
+Added 25 September 2026. Recorded here because `docs/RESULTS.md` measures these honestly but
+nothing acts on the measurements, and an unowned negative result quietly becomes permanent.
+
+Two components have now been measured as not earning their place:
+
+| Component | Standing | Runs |
+| --- | --- | --- |
+| Population prior | Δ=−0.0070, p=0.76 against the flat-prior arm — the flat-prior variant is the top row of the results table | Measured below or level twice consecutively |
+| Bayesian treatment vs plain ridge | Δ=−0.0007, p=0.54 on identical features | Four runs, never ahead |
+
+RESULTS.md gives the correct defence for the second: the extras "only matter where uncertainty
+is actionable, which a static offline replay never tests". That defence is sound and it is also
+**currently untestable**, because the measurement that would test it is the off-policy estimate
+blocked in item 11. The two items are linked: item 11 unblocks the evidence this decision
+needs.
+
+The first has no such defence. The population prior was justified by a synthetic n=4 result
+(+0.46 correlation) that RESULTS.md now describes as having "measured a world that was too
+easy", and it has been at or below the flat-prior arm on real held-out users twice.
+
+### Decision, 25 September 2026
+
+**Cut the population prior.** Two consecutive held-out runs put it at or below the arm that
+omits it, and its original justification — a synthetic n=4 result of +0.46 correlation — is
+described in RESULTS.md as having "measured a world that was too easy". There is no evidence
+left supporting it.
+
+Removing it touches: the `prior` build stage in `build_events.STAGES`, the artefact
+`data/artifacts/population_prior.npz`, the `entertainer-flat-prior` benchmark arm (which
+becomes simply `entertainer`), `models/population.py`, and the README section "3b. The prior
+knows what taste looks like". The block-diagonal reparameterisation in the taste fit goes with
+it.
+
+Keep the *evidence* in `docs/RESULTS.md`. A component removed for a measured reason is a
+result, and deleting the reason alongside the code is how a project re-adds the same idea two
+years later.
+
+### Still open: the Bayesian treatment vs plain ridge
+
+**Do not decide this yet.** The defence in RESULTS.md is sound — the extras only matter where
+uncertainty is actionable, which a static offline replay never tests — and it is currently
+untestable because the off-policy check is blocked in item 11.
+
+There is now a second reason to keep it regardless of that result: **the agent in Part two of
+the README depends on it.** An agent that acquires films unsupervised needs to distinguish
+"he will like this" from "I have no idea", and a point estimate cannot. Interval coverage
+measures at 0.87 against a nominal 0.90 on the real log, so the mechanism demonstrably works
+even though accuracy is level with ridge. Ridge cannot supply that at all.
+
+Revisit once the off-policy estimate runs.
+
+---
+
+## 13. Work from very few ratings — the research directions
+
+Added 25 September 2026. This is the project's defining constraint, restated in the README as
+"a system that only becomes good at five hundred verdicts has already failed, because nobody
+will reach five hundred."
+
+Everything currently built attacks this from one side: make the *model* frugal — closed-form
+Bayesian regression, a population prior, information-gain question selection. That side is
+close to exhausted. The three directions below attack it from the other side: make each
+verdict *teach more*.
+
+Survey done 25 September 2026; sources at the end of this section.
+
+### Direction A — extract craft attributes with a language model
+
+**The gap.** The engine's content tower embeds a prose card and gets back 256 numbers. Nothing
+in that pipeline isolates *how a film is made* from *what it is about*, and craft is what the
+README now says taste actually runs on — pacing, whether it grips in the first ten minutes,
+how it is shot and cut, whether it explains itself. Thallumaala and Avatar are both cases where
+the premise predicts the wrong answer and the execution predicts the right one.
+
+**The approach.** Use an LLM to extract structured attribute-sentiment pairs from reviews and
+synopses, producing an explicit per-title craft vocabulary rather than an opaque embedding.
+This is a well-established line — aspect extraction for explainable recommendation — and the
+recent work uses exactly this shape: induce a compact corpus-level aspect vocabulary, then
+extract aspect-opinion triples against it as constraints.
+
+**Why it fits the constraint.** A verdict currently teaches the model about one point in a
+192-dimensional space. Under aspect features a verdict teaches it about *qualities*, which
+transfer to every other title sharing them. That is the whole of the low-data argument.
+
+**Bonus.** It fixes item 5 for free. "Close to Drishyam 2" is unbelievable because nearness in
+a fused latent space is not legible; "both hold back information from you and pay it off late"
+is checkable. The explanation stops being a claim the user cannot verify.
+
+**Cost.** One new build stage over 73k titles, and a source of review text the catalogue does
+not currently hold.
+
+### Direction B — ask for comparisons, not ratings
+
+**The finding.** Preference-elicitation research converges on two results that the current
+cold start does not use: ask about *attributes* rather than items, and prefer *pairwise
+comparisons* to numeric scales, which extract more signal per question. Completion rates fall
+sharply past five to eight questions, which bounds the whole budget.
+
+**Against the current design.** The D-optimal question selection is already optimal *given*
+that the answer is a rating of one item. It has never been tested against a different question
+format, and the format may matter more than the selection criterion.
+
+**Caution.** The README's central claim is that the engine never asks you to describe yourself,
+because people cannot. "Ask about attributes" sits in obvious tension with that. The
+reconciliation, if there is one, is that a *comparison* is not a self-description — "this one
+over that one" is still a verdict, just a denser one. Adopting attribute questions wholesale
+would change what the project is.
+
+### Direction C — keep a written taste profile beside the vector
+
+**The approach.** Maintain a natural-language description of the user's taste, refreshed as
+verdicts accumulate, and use it as context for scoring. Few-shot prompting with a handful of
+liked and disliked titles is measurably better than zero-shot, and is competitive with
+cold-start recommenders specifically when natural-language preferences are supplied.
+
+**The known limit, stated plainly.** Both zero-shot and few-shot LLMs *under-perform* trained
+recommenders that have interaction data. That is the consistent finding and it should not be
+wished away. It is also not the regime this project operates in: at n=186 there is no
+interaction data to speak of, which is precisely where the ranking reverses.
+
+**Bonus.** It makes `/taste` say something a person can read and dispute. Today it prints
+"Axis 0, Axis 1, Axis 4" and the user has no way to tell whether it is right about him.
+
+**Caution.** This is the direction most likely to produce something that *sounds* right and is
+not. Any version of it ships behind `ent audit` on the real log, or it is not shipped.
+
+### How to decide between them
+
+Not by argument. `docs/LEARNINGS.md` records three separate things that improved on synthetic
+data and did nothing or harmed on held-out users, and two in-sample results that reversed under
+holdout. The same rule applies here.
+
+**Direction A first** — it is the only one that also repairs item 5, it produces features the
+existing Bayesian model can consume without redesign, and it can be measured with the benchmark
+that already exists by adding the craft features and re-running the arms. B and C both change
+the interaction model or the scoring path, which is a larger commitment on weaker evidence.
+
+**Blocked on item 10 and item 11.** None of this can be evaluated while the learning trend is
+unreadable and the log is at 186 verdicts, 82% positive. Fix the measurement, then feed it,
+then try Direction A.
+
+### Sources
+
+- [Understanding Before Recommendation: Semantic Aspect-Aware Review Exploitation via LLMs](https://dl.acm.org/doi/10.1145/3704999) — ACM TOIS
+- [HADSF: Aspect Aware Semantic Control for Explainable Recommendation](https://arxiv.org/abs/2510.26994)
+- [Enhancing recommender systems with LLM-extracted explicit features](https://link.springer.com/article/10.1007/s10115-025-02665-2) — Knowledge and Information Systems
+- [Large Language Models as Conversational Movie Recommenders: A User Study](https://arxiv.org/abs/2404.19093)
+- [Do LLMs Understand User Preferences? Evaluating LLMs On User Rating Prediction](https://arxiv.org/pdf/2305.06474)
+- [Deep Rating Elicitation for New Users in Collaborative Filtering](https://arxiv.org/pdf/2402.16327)
+- [Small LLMs can be good cold-start recommenders](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1705245/full) — Frontiers in AI, 2026
+- [Awesome-Cold-Start-Recommendation](https://github.com/YuanchenBei/Awesome-Cold-Start-Recommendation) — maintained survey list
+
+---
+
+## 14. The agent — new releases, judged, acquired, ready to watch
+
+Added 25 September 2026. Specified in the README under "Part two — the agent". **Nothing is
+built.** This item exists so the engine work above is ordered against something real.
+
+### What it needs from the engine
+
+| Need | State |
+| --- | --- |
+| Score an arbitrary title, including one not in the catalogue | **Exists** — `POST /api/judge`, built for item 2 |
+| A calibrated "I am not sure", so it can decline | **Exists and works** — interval coverage 0.87 against nominal 0.90 |
+| Predictions good enough to act on unsupervised | **Not yet** — see item 10; the model does not beat a running average on the real log |
+
+The middle row is why item 12 does not cut the Bayesian machinery even though it is level with
+ridge on accuracy. An agent that acquires films without being asked must be able to say "I have
+no idea", and a point estimate cannot.
+
+### The pieces
+
+- **A source of new releases.** TMDB already supplies enough to enumerate recent titles, and
+  the live feed in `web/live.py` already talks to it.
+- **The back catalogue too.** A 1994 film the user has never seen answers "what should I watch
+  tonight" as well as a new one. Restricting the agent to new releases would be a smaller
+  system than the one specified.
+- **A decision rule with a threshold.** Conservative by default. A wrong acquisition costs disk
+  and trust; a missed one costs nothing, because the user can still ask.
+- **Delivery into Jellyfin.** The target is a library path on the home server.
+- **Feedback.** Whether the title was watched, finished or ignored should become a verdict.
+  This is the only ratings source that costs the user nothing, which makes it directly relevant
+  to item 13's constraint.
+
+### Open questions
+
+- **Where titles are acquired from is not settled**, and it is the one decision that must be
+  made explicitly rather than inherited from whatever library is convenient. Whatever the agent
+  does must respect what the user is licensed to hold.
+- **Disk budget and an eviction rule.** An unsupervised agent with neither fills the disk.
+- **Sharing.** `events` has no user column, so one install is one person's taste. Several people
+  on one Jellyfin server is a schema change. Noted in item 9 as well.
 
 ---
 
