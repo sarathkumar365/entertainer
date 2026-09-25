@@ -36,7 +36,7 @@ def test_changing_the_data_directory_moves_every_module_that_binds_paths(monkeyp
     """
     from entertainer import bundle, config, engine, manifests, pipeline, store
     from entertainer.data import catalog, download, imdb
-    from entertainer.models import cf, encoder, fusion, population, taste
+    from entertainer.models import cf, encoder, fusion, taste
 
     moved = tmp_path / "moved"
     monkeypatch.setenv("ENTERTAINER_DATA_DIR", str(moved))
@@ -54,7 +54,6 @@ def test_changing_the_data_directory_moves_every_module_that_binds_paths(monkeyp
         "cf": cf,
         "encoder": encoder,
         "fusion": fusion,
-        "population": population,
         "taste": taste,
     }
     stale = {name: str(mod.PATHS.root) for name, mod in binders.items() if mod.PATHS.root != moved}

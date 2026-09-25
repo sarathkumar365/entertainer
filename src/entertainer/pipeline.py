@@ -94,7 +94,7 @@ def coverage_is_stale(coverage: dict[str, int]) -> float | None:
     return share if share < STALE_COVERAGE else None
 
 
-#: The eight stages of a full build, in dependency order, with the label the
+#: The seven stages of a full build, in dependency order, with the label the
 #: Reporter records them under.
 STAGES = (
     ("sources", "downloading source data"),
@@ -104,7 +104,6 @@ STAGES = (
     ("embeddings", "encoding item text"),
     ("cf", "factorising MovieLens"),
     ("fusion", "fusing item space"),
-    ("prior", "learning the population prior"),
 )
 
 
@@ -147,8 +146,6 @@ class BuildSettings:
 
     fusion_dim: int = 192
 
-    prior_max_users: int = 20_000
-    prior_shrinkage: float = 0.15
 
     #: Factorise MovieLens in a separate process while the catalogue, TMDB
     #: and embedding stages run. It needs only ratings.csv, so it has no
@@ -231,7 +228,7 @@ def cf_is_current(settings: BuildSettings) -> bool:
         stamp.exists()
         and stamp.read_text().strip() == cf_inputs(settings)
         and (PATHS.embeddings / "cf_factors.npy").exists()
-        # The prior and the benchmark read the holdout the factorisation chose.
+        # The benchmark reads the holdout the factorisation chose.
         and (settings.cf_holdout <= 0 or integrity.holdout_path().exists())
     )
 

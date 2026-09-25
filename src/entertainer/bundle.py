@@ -45,7 +45,7 @@ READABLE_FORMATS = (1, 2)
 
 # Everything the interface and the recommender need, by role.
 CORE = ("titles.parquet",)
-SPACE = ("fused.npz", "population_prior.npz")
+SPACE = ("fused.npz",)
 ENCODE = ("content.npy", "content_ids.npy")
 
 #: Meta key naming the build the local catalogue came from, so `ent pull`
@@ -102,8 +102,8 @@ def export(
 ) -> BundleInfo:
     """Write a bundle.
 
-    ``include_space`` carries the fused item space and population prior, which
-    `ent recs`, `ent taste` and `ent audit` need. Without it the bundle still
+    ``include_space`` carries the fused item space, which `ent recs`,
+    `ent taste` and `ent audit` need. Without it the bundle still
     supports rating and search, which is the common case for a second machine.
 
     ``include_encodings`` adds the raw content embeddings. Only `ent add`
@@ -283,7 +283,7 @@ def restore(path: Path, overwrite: bool = False) -> dict:
             src = staging / name
             if not src.exists():
                 continue
-            dest = (PATHS.artifacts if name.endswith("prior.npz") else PATHS.embeddings) / name
+            dest = PATHS.embeddings / name
             tmp = dest.with_name(f".{name}.incoming")
             shutil.copy2(src, tmp)
             incoming.append((tmp, dest))

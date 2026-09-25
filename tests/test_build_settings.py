@@ -22,7 +22,6 @@ def test_the_defaults_are_the_ones_the_real_build_used():
     assert (s.cf_factors, s.cf_iterations, s.cf_holdout) == (192, 20, 2_000)
     assert s.cf_signal == "watched"
     assert s.fusion_dim == 192
-    assert (s.prior_max_users, s.prior_shrinkage) == (20_000, 0.15)
 
 
 def test_the_fused_space_cannot_be_wider_than_the_factorisation():
@@ -40,16 +39,17 @@ def test_a_narrower_fused_space_is_allowed():
 def test_every_stage_has_a_label_and_they_are_in_dependency_order():
     names = [name for name, _ in STAGES]
     assert names == [
-        "sources", "catalogue", "tmdb", "prune", "embeddings", "cf", "fusion", "prior",
+        "sources", "catalogue", "tmdb", "prune", "embeddings", "cf", "fusion",
     ]
     assert all(label for _, label in STAGES)
     # prune before embeddings, so nothing is encoded that is about to be
-    # deleted; embeddings before fusion; fusion before the prior, which lives
-    # in the fused space.
+    # deleted; embeddings and cf before fusion, which combines both towers.
     assert names.index("prune") < names.index("embeddings")
     assert names.index("embeddings") < names.index("fusion")
     assert names.index("cf") < names.index("fusion")
-    assert names.index("fusion") < names.index("prior")
+    # Fusion is the last stage: the population prior that used to follow it was
+    # cut on 25 September 2026, measured at or below the arm that omitted it.
+    assert names[-1] == "fusion"
 
 
 def test_the_reporter_stages_match_the_declared_ones():

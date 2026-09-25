@@ -219,17 +219,9 @@ def test_elicitation_is_not_recomputed_per_user(fake_movielens, monkeypatch):
     assert calls["n"] == 1, calls
 
 
-def test_the_population_prior_arm_is_separable(fake_movielens):
-    """Both engine arms must run, so the prior's contribution can be measured."""
-    fs, meta, item_map, _ = fake_movielens
-    cfg = simulate.SimConfig(n_users=10, budget=12, seed=5)
-    histories = dict(list(_histories(item_map).items())[:10])
-    results = simulate.run(
-        fs, meta, histories, cfg, arms=("entertainer", "entertainer-flat-prior")
-    )
-    assert results["entertainer"].per_user
-    assert results["entertainer-flat-prior"].per_user
-    # With prior=None the two arms are the same computation and must agree.
-    a = results["entertainer"].summary()["ndcg@10"]
-    b = results["entertainer-flat-prior"].summary()["ndcg@10"]
-    assert a == pytest.approx(b)
+def test_the_arm_roster_carries_no_population_prior(fake_movielens):
+    """The population prior was cut: two held-out runs put it at or below the
+    arm that omitted it, and its justification was a synthetic result the
+    replay did not reproduce. Nothing may reintroduce the arm silently."""
+    assert "entertainer-flat-prior" not in simulate.ARMS
+    assert "entertainer" in simulate.ARMS

@@ -170,7 +170,7 @@ def _run_elicitation(
             ids = np.array([a[0] for a in answered])
             rewards = np.array([a[1] for a in answered])
             model = fit_taste(
-                fs.vectors_for(ids), rewards, allow_rff=False, prior=_ACTIVE_PRIOR
+                fs.vectors_for(ids), rewards, allow_rff=False
             )
             batch = elicit.next_questions(
                 model, fs, meta, asked, k=cfg.seed_questions, pool=pool,
@@ -305,7 +305,7 @@ def _with_negatives(fs, ids, rewards, seed=0):
     return X, y, w
 
 
-def _taste_arm(fs, meta, keep, answered, k, prior, negatives=True):
+def _taste_arm(fs, meta, keep, answered, k, negatives=True):
     if len(answered) < 3:
         return arm_quality(fs, meta, keep, answered, k)
     ids = np.array([a[0] for a in answered])
@@ -315,34 +315,20 @@ def _taste_arm(fs, meta, keep, answered, k, prior, negatives=True):
     else:
         X, y, w = fs.vectors_for(ids), rewards, None
     model = fit_taste(
-        X, y, sample_weight=w, prior=prior, capacity_obs=len(rewards)
+        X, y, sample_weight=w, capacity_obs=len(rewards)
     )
     mean = model.predict(fs.matrix, with_std=False)
     return _rank(mean, keep, fs, k)
 
 
-def arm_taste_flat(fs, meta, keep, answered, k):
-    """The engine with an isotropic prior: no population knowledge at all."""
-    return _taste_arm(fs, meta, keep, answered, k, prior=None)
-
-
 def arm_taste_no_negatives(fs, meta, keep, answered, k):
     """The engine without sampled negatives: positives-only regression."""
-    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR, negatives=False)
+    return _taste_arm(fs, meta, keep, answered, k, negatives=False)
 
 
 def arm_taste(fs, meta, keep, answered, k):
-    """The engine: evidence-tuned Bayesian posterior over a population prior.
-
-    The prior is injected by ``run`` rather than loaded here, so that the
-    replay can guarantee it was fitted without the simulated user's own
-    opinions in it.
-    """
-    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR)
-
-
-# Set by ``run``; module-level so the arm signature stays uniform.
-_ACTIVE_PRIOR = None
+    """The engine: evidence-tuned Bayesian posterior over the fused space."""
+    return _taste_arm(fs, meta, keep, answered, k)
 
 
 ARMS = {
@@ -351,7 +337,6 @@ ARMS = {
     "content-centroid": arm_content_centroid,
     "weighted-kNN": arm_weighted_knn,
     "ridge": arm_ridge,
-    "entertainer-flat-prior": arm_taste_flat,
     "entertainer-no-negatives": arm_taste_no_negatives,
     "entertainer": arm_taste,
 }
@@ -364,11 +349,8 @@ def run(
     cfg: SimConfig,
     arms: Sequence[str] = tuple(ARMS),
     elicitation: str = "v-optimal",
-    prior=None,
 ) -> dict[str, ArmResult]:
     """``elicitation``: v-optimal | d-optimal | random."""
-    global _ACTIVE_PRIOR
-    _ACTIVE_PRIOR = prior
     if elicitation in ("v-optimal", "d-optimal"):
         cfg = SimConfig(**{**cfg.__dict__, "criterion": elicitation})
     rng = np.random.default_rng(cfg.seed)
