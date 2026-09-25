@@ -124,6 +124,12 @@ def audit(interval: float = 0.90, ctx: AppContext = Depends(get_context)) -> dic
             "steps": result.steps,
             "absolute_error": result.absolute_error,
             "baseline_error": result.baseline_error,
+            # The control's error minus the model's, per step. Positive means
+            # the model beat predicting the running average on that verdict.
+            # Plotted rather than re-derived, because the readings above are
+            # computed from it and the two must not drift apart.
+            "skill": result.skill(),
+            "informative": result.informative(),
             "predicted": result.predicted,
             "actual": result.actual,
             "inside_interval": result.inside_interval,
