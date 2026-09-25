@@ -12,6 +12,7 @@ from sklearn.linear_model import RidgeCV
 
 from .. import store
 from ..engine import NEGATIVE_REWARD, NEGATIVE_WEIGHT, Engine
+from ..errors import NotEnoughEvidence
 from ..manifests import write as write_manifest
 from ..models.taste import verdict_to_reward
 
@@ -33,7 +34,7 @@ def _probability(mean: np.ndarray, std: np.ndarray) -> np.ndarray:
     return stats.norm.sf((LIKE_AT - mean) / std)
 
 
-def _ridge_predictions(engine: Engine, con, item_ids: list[int]) -> np.ndarray:
+def _ridge_predictions(engine: Engine, con, vectors: np.ndarray) -> np.ndarray:
     fs = engine.features(con)
     ids, rewards, _, _ = engine.labels(con)
     if len(ids) < 3:
@@ -46,7 +47,7 @@ def _ridge_predictions(engine: Engine, con, item_ids: list[int]) -> np.ndarray:
     y = np.concatenate([rewards, np.full(rows.size, NEGATIVE_REWARD)])
     weights = np.concatenate([np.ones(len(rewards)), np.full(rows.size, NEGATIVE_WEIGHT)])
     ridge = RidgeCV(alphas=(0.1, 1.0, 10.0, 100.0)).fit(X, y, sample_weight=weights)
-    return ridge.predict(fs.vectors_for(item_ids))
+    return ridge.predict(vectors)
 
 
 def predict(engine: Engine, item_id: int) -> dict[str, float | bool]:
@@ -59,11 +60,21 @@ def predict(engine: Engine, item_id: int) -> dict[str, float | bool]:
         fs = engine.features(con)
         if item_id not in fs.index:
             raise ValueError("this title is not in the current item space")
-        model = engine.fit(con, save=False)
-        if model is None:
-            raise ValueError("at least three explicit verdicts are needed before prediction")
-        mean, std = model.predict(fs.vectors_for([item_id]))
-        ridge = _ridge_predictions(engine, con, [item_id])
+        return predict_vector(engine, con, fs.vectors_for([item_id])[0])
+
+
+def predict_vector(engine: Engine, con, x: np.ndarray) -> dict[str, float | bool]:
+    """The same prediction for a feature vector, which need not be in the space.
+
+    This is how a title the catalogue has never held is judged: its vector is
+    built on the fly and nothing is written.
+    """
+    model = engine.fit(con, save=False)
+    if model is None:
+        raise NotEnoughEvidence("at least three explicit verdicts are needed before prediction")
+    X = np.asarray(x, dtype=np.float32).reshape(1, -1)
+    mean, std = model.predict(X)
+    ridge = _ridge_predictions(engine, con, X)
     probability = float(_probability(mean, std)[0])
     score = float(mean[0])
     deviation = float(std[0])
@@ -102,7 +113,7 @@ def seal(engine: Engine, item_ids: list[int]) -> dict:
             raise ValueError("at least three explicit verdicts are needed before sealing validation")
         fs = engine.features(con)
         mean, std = model.predict(fs.vectors_for(unique))
-        ridge = _ridge_predictions(engine, con, unique)
+        ridge = _ridge_predictions(engine, con, fs.vectors_for(unique))
         full_p = _probability(mean, std)
         # Ridge has no posterior variance; use its residual-scale-free score as
         # a calibrated ranking probability only, not a confidence interval.

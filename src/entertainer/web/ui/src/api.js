@@ -53,6 +53,8 @@ export const api = {
   add: (body) => post("/api/add", body),
   undo: () => post("/api/undo"),
   predict: (itemId) => request(`/api/predict/${itemId}`),
+  search: (q, limit = 8) => request(`/api/search?${new URLSearchParams({ q, limit })}`),
+  judge: (body) => post("/api/judge", body),
   validationCases: () => request("/api/validation/cases"),
   validationSummary: () => request("/api/validation/summary"),
   seal: (itemIds) => post("/api/validation/seal", { item_ids: itemIds }),

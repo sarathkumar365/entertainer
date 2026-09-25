@@ -340,6 +340,157 @@ def test_prediction_and_logged_recommendation_slate(client):
     assert client.get("/api/progress").json()["events"] == 3
 
 
+def _three_verdicts(client):
+    feed = client.get("/api/feed?years=4&limit=10").json()["items"]
+    for item in feed[:3]:
+        client.post("/api/rate", json={"item_id": item["item_id"], "verdict": "like"})
+    return feed
+
+
+def test_judge_by_item_id_matches_predict(client):
+    feed = _three_verdicts(client)
+    target = feed[4]["item_id"]
+    judged = client.post("/api/judge", json={"item_id": target})
+    assert judged.status_code == 200
+    body = judged.json()
+    assert body["source"] == "catalogue"
+    assert body["item"]["item_id"] == target
+    assert body["prediction"] == client.get(f"/api/predict/{target}").json()
+
+
+def test_judge_finds_a_catalogue_title_by_its_tmdb_id(client):
+    feed = _three_verdicts(client)
+    target = feed[4]["item_id"]
+    kind = feed[4]["kind"]
+    body = client.post("/api/judge", json={"tmdb_id": 900000 + target, "kind": kind}).json()
+    assert body["source"] == "catalogue"
+    assert body["item"]["item_id"] == target
+
+
+def test_judging_a_new_release_writes_nothing(client, monkeypatch):
+    """Asking about a title must not quietly add it to the catalogue."""
+    from entertainer import store
+    from entertainer.data import tmdb
+    from entertainer.models import encoder, fusion
+    from entertainer.web.routers import validation
+
+    _three_verdicts(client)
+    monkeypatch.setattr(validation, "has_tmdb", lambda: True)
+    monkeypatch.setattr(
+        tmdb, "detail",
+        lambda tmdb_id, kind: {
+            "id": tmdb_id, "title": "Brand New", "release_date": "2026-09-01",
+            "runtime": 131, "original_language": "ml", "overview": "Just out.",
+            "genres": [{"name": "Thriller"}],
+        },
+    )
+    rng = np.random.default_rng(1)
+    monkeypatch.setattr(
+        encoder, "encode_texts",
+        lambda texts, show_progress=False: rng.normal(size=(len(texts), 12)).astype(np.float32),
+    )
+    # The fixture's fused space is not a real projection basis; what is under
+    # test here is the wiring and that nothing is written, not the maths of
+    # projection, which test_pipeline covers.
+    monkeypatch.setattr(
+        fusion.FusionArtifacts, "project",
+        lambda self, content: content / np.linalg.norm(content, axis=1, keepdims=True),
+    )
+    with store.session(read_only=True) as con:
+        titles_before = con.execute("SELECT count(*) FROM titles").fetchone()[0]
+    space_before = len(fusion.load().item_ids)
+
+    r = client.post("/api/judge", json={"tmdb_id": 42, "kind": "movie"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"] == "text"
+    assert body["item"]["title"] == "Brand New"
+    assert body["item"]["year"] == 2026
+    assert 0 <= body["prediction"]["score"] <= 10
+    assert body["prediction"]["interval_low"] <= body["prediction"]["interval_high"]
+
+    with store.session(read_only=True) as con:
+        assert con.execute("SELECT count(*) FROM titles").fetchone()[0] == titles_before
+    assert len(fusion.load().item_ids) == space_before
+
+
+def _fake_tmdb(monkeypatch, rating=7.0, votes=500):
+    from entertainer.data import tmdb
+    from entertainer.models import encoder, fusion
+    from entertainer.web.routers import validation
+
+    monkeypatch.setattr(validation, "has_tmdb", lambda: True)
+    monkeypatch.setattr(
+        tmdb, "detail",
+        lambda tmdb_id, kind: {
+            "id": tmdb_id, "title": "Brand New", "release_date": "2026-09-01",
+            "runtime": 131, "original_language": "ml", "overview": "Just out.",
+            "vote_average": rating, "vote_count": votes,
+        },
+    )
+    monkeypatch.setattr(
+        encoder, "encode_texts",
+        lambda texts, show_progress=False: np.ones((len(texts), 12), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        fusion.FusionArtifacts, "project",
+        lambda self, content: content / np.linalg.norm(content, axis=1, keepdims=True),
+    )
+
+
+def test_a_new_release_is_judged_on_its_tmdb_rating_as_add_would_be(client, monkeypatch):
+    from entertainer.evaluation import personal
+
+    _three_verdicts(client)
+    seen = []
+    original = personal.predict_vector
+    monkeypatch.setattr(
+        personal, "predict_vector",
+        lambda engine, con, x: seen.append(np.array(x)) or original(engine, con, x),
+    )
+    _fake_tmdb(monkeypatch, rating=9.0, votes=5000)
+    client.post("/api/judge", json={"tmdb_id": 42, "kind": "movie"})
+    _fake_tmdb(monkeypatch, rating=3.0, votes=5000)
+    client.post("/api/judge", json={"tmdb_id": 42, "kind": "movie"})
+    # Only the quality column differs, and the better-rated one sits higher.
+    assert seen[0][-5] > seen[1][-5]
+    assert np.allclose(seen[0][:-5], seen[1][:-5])
+
+
+def test_a_catalogue_title_outside_the_space_falls_back_to_tmdb(client, monkeypatch):
+    _three_verdicts(client)
+    _fake_tmdb(monkeypatch)
+    r = client.post("/api/judge", json={"item_id": 999_999, "tmdb_id": 42, "kind": "movie"})
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "text"
+
+
+def test_judge_refuses_an_unknown_kind(client):
+    r = client.post("/api/judge", json={"tmdb_id": 42, "kind": "series"})
+    assert r.status_code == 422
+
+
+def test_search_results_from_the_catalogue_carry_their_tmdb_id(client):
+    hits = client.get("/api/search?q=ML Film 3").json()["catalogue"]
+    assert hits and all(h["tmdb_id"] == 900000 + h["item_id"] for h in hits)
+
+
+def test_judging_a_new_release_needs_tmdb(client):
+    _three_verdicts(client)
+    r = client.post("/api/judge", json={"tmdb_id": 42, "kind": "movie"})
+    assert r.status_code == 400
+
+
+def test_judge_and_predict_say_when_there_are_too_few_verdicts(client):
+    feed = client.get("/api/feed?years=4&limit=10").json()["items"]
+    for r in (
+        client.post("/api/judge", json={"item_id": feed[0]["item_id"]}),
+        client.get(f"/api/predict/{feed[0]['item_id']}"),
+    ):
+        assert r.status_code == 409
+        assert r.json()["code"] == "not_enough_evidence"
+
+
 def test_token_gate_rejects_unauthenticated_requests(tmp_path, monkeypatch, client):
     """Off the loopback interface the page is somebody else's write access."""
     from entertainer.web import app as webapp

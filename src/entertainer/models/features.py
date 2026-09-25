@@ -66,6 +66,9 @@ class FeatureSpace:
     side: np.ndarray         # (N, E) standardised side features
     index: dict[int, int]    # item_id -> row
     columns: Columns | None = None
+    #: (mean, sd) per side column as ``build`` measured it on the catalogue,
+    #: so a title outside the space can be placed on the same scale.
+    side_stats: tuple[tuple[float, float], ...] | None = None
     _matrix: np.ndarray | None = None
 
     @property
@@ -93,8 +96,48 @@ class FeatureSpace:
     def vectors_for(self, item_ids) -> np.ndarray:
         return self.matrix[self.rows_for(item_ids)]
 
+    def side_for(self, row: dict, reference_year: int = 2026) -> np.ndarray:
+        """Side features for a title that is not in the space.
 
-def _standardise(col: np.ndarray) -> np.ndarray:
+        Scaled by the catalogue's own statistics, so the vector is what
+        ``build`` would have given it. A value the row lacks sits at the
+        mean, which is to say it contributes nothing.
+        """
+        if self.side_stats is None:
+            raise ValueError("this feature space was built without side statistics")
+        raw = _raw_side(row, reference_year)
+        out = [
+            _scale(np.array([value]), mu, sd)[0]
+            for value, (mu, sd) in zip(raw[:-1], self.side_stats[:-1], strict=True)
+        ]
+        tv_mean = self.side_stats[-1][0]
+        out.append((raw[-1] - tv_mean) * 0.15)
+        return np.array(out, dtype=np.float32)
+
+
+def _raw_side(r: dict, reference_year: int) -> tuple[float, ...]:
+    """One title's side features before scaling, in SIDE_FEATURE_NAMES order.
+
+    Recency is negated here, so a larger value is always more recent.
+    """
+    nan = float("nan")
+    return (
+        float(r["quality"]) if r.get("quality") is not None else nan,
+        math.log1p(r["imdb_votes"]) if r.get("imdb_votes") else nan,
+        -(reference_year - int(r["year"])) if r.get("year") else nan,
+        min(int(r["runtime"]), 300) if r.get("runtime") else nan,
+        1.0 if r.get("kind") == "tv" else 0.0,
+    )
+
+
+def _stats(col: np.ndarray) -> tuple[float, float]:
+    observed = col[~np.isnan(col)]
+    if observed.size == 0:
+        return (float("nan"), 1.0)
+    return (float(observed.mean()), float(observed.std()))
+
+
+def _scale(col: np.ndarray, mu: float, sd: float) -> np.ndarray:
     """Centre and scale, tolerating a column that is entirely absent.
 
     A feature nobody in the catalogue has — runtime on a catalogue of series,
@@ -102,10 +145,8 @@ def _standardise(col: np.ndarray) -> np.ndarray:
     than NaN. A single NaN here propagates through the fused matrix into every
     prediction, and does so silently.
     """
-    observed = col[~np.isnan(col)]
-    if observed.size == 0:
+    if math.isnan(mu):
         return np.zeros_like(col, dtype=np.float64)
-    mu, sd = float(observed.mean()), float(observed.std())
     out = (np.nan_to_num(col, nan=mu) - mu) / (sd if sd > 1e-9 else 1.0)
     # Side features enter on the same scale as a single latent axis, so that
     # the prior does not implicitly favour them.
@@ -119,35 +160,21 @@ def build(
     reference_year: int = 2026,
 ) -> FeatureSpace:
     n = len(item_ids)
-    quality = np.full(n, np.nan, dtype=np.float64)
-    votes = np.full(n, np.nan, dtype=np.float64)
-    year = np.full(n, np.nan, dtype=np.float64)
-    runtime = np.full(n, np.nan, dtype=np.float64)
-    is_tv = np.zeros(n, dtype=np.float64)
-
+    raw = np.full((n, len(SIDE_FEATURE_NAMES)), np.nan, dtype=np.float64)
+    raw[:, -1] = 0.0
     for i, iid in enumerate(item_ids.tolist()):
         r = meta.get(int(iid))
-        if not r:
-            continue
-        if r.get("quality") is not None:
-            quality[i] = r["quality"]
-        if r.get("imdb_votes"):
-            votes[i] = math.log1p(r["imdb_votes"])
-        if r.get("year"):
-            year[i] = reference_year - int(r["year"])
-        if r.get("runtime"):
-            runtime[i] = min(int(r["runtime"]), 300)
-        is_tv[i] = 1.0 if r.get("kind") == "tv" else 0.0
+        if r:
+            raw[i] = _raw_side(r, reference_year)
+    quality = raw[:, 0]
+    is_tv = raw[:, -1]
 
+    stats = [_stats(raw[:, j]) for j in range(raw.shape[1] - 1)]
     side = np.column_stack(
-        [
-            _standardise(quality),
-            _standardise(votes),
-            _standardise(-year),  # positive = more recent
-            _standardise(runtime),
-            (is_tv - is_tv.mean()) * 0.15,
-        ]
+        [_scale(raw[:, j], *stats[j]) for j in range(len(stats))]
+        + [(is_tv - is_tv.mean()) * 0.15]
     ).astype(np.float32)
+    side_stats = (*stats, (float(is_tv.mean()), 1.0))
 
     languages: list[str] = []
     lang_lookup: dict[str, int] = {}
@@ -193,4 +220,5 @@ def build(
         side=side,
         index={int(v): i for i, v in enumerate(item_ids.tolist())},
         columns=columns,
+        side_stats=side_stats,
     )
