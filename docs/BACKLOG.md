@@ -31,7 +31,7 @@ good recommendations out of very few ratings. Item 14 is what the whole thing is
 | 8 | Library — grid view, legible sizes, verify Saved | Mechanical |
 | 9 | Release publish / pull — switch it on | Configuration only |
 | 10 | **Unblock the two measurements that answer "is it learning me"** | Small, and nothing above it moves this |
-| 11 | Feed it properly — volume, real dislikes, and rating where it counts | No code; a habit and one nudge in the UI |
+| 11 | Feed it properly — volume, real dislikes, and rating where it counts | **Screens done** 25 Sep; the rating itself is yours |
 | 12 | ~~Cut the population prior~~ — the Bayesian-vs-ridge call stays open | **Prior removed** 25 Sep; ridge call blocked on item 11 |
 | 13 | Work from very few ratings — the research directions | The core bet; unscoped |
 | 14 | The agent — new releases, judged, acquired, ready to watch | Part two of the README; nothing built |
@@ -515,15 +515,24 @@ answer "were those slates any good?". The off-policy estimate needs 30 such outc
 
 ### The work
 
-- **Say it in the app.** `/recs` should carry one line making the point — rating here is worth
-  more than rating elsewhere, because it is the only place that measures whether the picks
-  were good. Copy only.
-- **Show the counter.** The Evidence page already says "16 of 30 recommendations have an
-  outcome" and item 4 flags that string as unreadable. Rewriting it is the natural place to
-  say what closes the gap.
-- **Rate 14 or more from `/recs`.** Not code. It is the smallest action in this document with
-  the largest unlock: it is what lets the off-policy check run at all, and that check is the
-  only measurement that tests the model where its uncertainty is actionable.
+- ~~**Say it in the app.**~~ **Done, 25 September 2026.** `/recs` now carries a `Worth` block
+  above the slate: *"Rating here counts twice… 16 of 30 recorded; 14 more unlock the check on
+  Evidence."* The count is live, and it changes to a finished message once the gap closes.
+- ~~**Show the counter.**~~ **Done, 25 September 2026.** The Evidence block is retitled from
+  "Off-policy check" to **"Were the recommendations any good?"**, given a progress bar so the
+  gap reads at a glance, and told plainly that only the Recommendations page closes it. The
+  `ok` branch was reworded too — "You rated the picks you were shown" against "Today's model
+  would have picked ones you rate" — since it would otherwise have been the only unreadable
+  half left.
+
+  The count rides on the slate response rather than a second request.
+  `offpolicy.usable_count` was split out of `estimate` for it: the count is pure SQL and the
+  estimate refits the model, and a page view must not pay for a fit. Both derive from the same
+  join so they cannot disagree about what counts, asserted by test.
+- **Rate 14 or more from `/recs`.** Not code, and the only part of this item still open. It is
+  the smallest action in this document with the largest unlock: it is what lets the off-policy
+  check run at all, and that check is the only measurement that tests the model where its
+  uncertainty is actionable.
 - **Then bulk toward roughly 400 verdicts, leaning on dislikes.** `ent bulk` takes a file of
   `title | verdict` lines, which is the fastest route for titles already known to be
   disliked. The target is a less lopsided log, not a bigger one.
