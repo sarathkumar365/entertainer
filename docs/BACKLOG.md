@@ -33,7 +33,7 @@ good recommendations out of very few ratings. Item 14 is what the whole thing is
 | 10 | **Unblock the two measurements that answer "is it learning me"** | Small, and nothing above it moves this |
 | 11 | Feed it properly — volume, real dislikes, and rating where it counts | **Screens done** 25 Sep; the rating itself is yours |
 | 12 | ~~Cut the population prior~~ — the Bayesian-vs-ridge call stays open | **Prior removed** 25 Sep; ridge call blocked on item 11 |
-| 13 | Work from very few ratings — the research directions | The core bet; unscoped |
+| 13 | Work from very few ratings — **craft as its own signal** | Scoped 25 Sep; reviews ruled out, crew measured available |
 | 14 | The agent — new releases, judged, acquired, ready to watch | Part two of the README; nothing built |
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
@@ -647,6 +647,106 @@ is checkable. The explanation stops being a claim the user cannot verify.
 
 **Cost.** One new build stage over 73k titles, and a source of review text the catalogue does
 not currently hold.
+
+#### Scoped, 25 September 2026 — and the review source is dead
+
+The plan above said "extract structured attribute-sentiment pairs from reviews and synopses".
+Before building anything on that, TMDB's review coverage was measured on the *most-voted*
+title in each language — the best case, not the tail:
+
+| language | title | reviews | characters |
+| --- | --- | ---: | ---: |
+| en | The Shawshank Redemption | 20 | 13,158 |
+| en | The Dark Knight | 16 | 19,804 |
+| ko | Parasite | 16 | 30,814 |
+| te | RRR | 8 | 14,745 |
+| ja | Spirited Away | 2 | 2,128 |
+| ta | Jai Bhim | 2 | 1,497 |
+| ml | Drishyam | 1 | 3,016 |
+| ml | Drishyam 2 | 1 | **146** |
+| kn | K.G.F: Chapter 2 | **0** | 0 |
+| kn | Kantara | **0** | 0 |
+| ml | The Goat Life | **0** | 0 |
+| ta | Master | **0** | 0 |
+
+**Reviews are an English-language feature.** Building craft extraction on them would work
+beautifully for Hollywood and produce nothing for Malayalam and Kannada — the same silent,
+one-directional bias as the `akas.language` failure, arriving by a different route. Ruled out
+on the measurement, not on taste.
+
+Nor can the gap be filled from what the catalogue already holds. Field coverage by language:
+
+| language | titles | has overview | avg overview | has keywords | avg keywords | has director |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| en | 27,485 | 98.5% | 267 chars | **92.4%** | 8.2 | 99.7% |
+| ja | 4,722 | 99.0% | 340 | 93.0% | 7.5 | 98.0% |
+| ko | 2,273 | 99.4% | 242 | 84.4% | 5.5 | 94.5% |
+| hi | 3,409 | 97.7% | 263 | **41.2%** | 1.6 | 99.7% |
+| ml | 1,868 | 97.6% | 223 | **33.4%** | 1.4 | 99.9% |
+| tr | 2,709 | 84.3% | 338 | **25.7%** | 0.8 | 99.6% |
+
+Keywords are lopsided the same way, and they are the wrong shape regardless — a Malayalam
+title's keywords read `police, ex-lover, training camp, murder, spa, ipl`. That is plot, not
+craft. A 223-character synopsis has no room for how a film is shot either.
+
+#### What *is* universally available: the crew
+
+TMDB `/credits` was measured the same way, and it is the opposite story:
+
+| language | title | crew rows | cinematographer | editor | composer |
+| --- | --- | ---: | --- | --- | --- |
+| ml | Drishyam | 39 | Sujith Vaassudev | Ayoob Khan | — |
+| ml | The Goat Life | 36 | Sunil K S | Sreekar Prasad | A.R. Rahman |
+| kn | Kantara | 26 | Arvind Kashyap | Prateek Shetty | B. Ajaneesh Loknath |
+| kn | K.G.F: Chapter 2 | 31 | Bhuvan Gowda | Ujwal Kulkarni | Ravi Basrur |
+| ta | Jai Bhim | 36 | S. R. Kathir | Philomin Raj | Sean Roldan |
+| ko | Parasite | 170 | Hong Kyung-pyo | Yang Jin-mo | Jung Jae-il |
+| en | The Dark Knight | 149 | Wally Pfister | Lee Smith | Hans Zimmer |
+
+The films with **zero** reviews have **26 to 39** crew credits. Coverage does not collapse
+outside English, because credits are catalogue facts rather than audience behaviour.
+
+This is also a better match for what craft actually is. Thallumaala is not well made in the
+abstract — it is well made by Khalid Rahman and Jimshi Khalid. A director-and-cinematographer
+pair is a style signature, and unlike an LLM's opinion about a film it cannot be hallucinated.
+
+**And it is free.** TMDB accepts `append_to_response=keywords,credits`, verified returning
+both in a single request. The enrichment stage already makes exactly one `/movie/{id}` call
+per title, so craft data costs **zero additional requests** — it rides the call already being
+paid for. The payload grows from 2.3 KB to 38.8 KB, which is bytes rather than requests, and
+item 7 establishes that request count is the lever.
+
+#### The actual gap in the model
+
+Directors and cast already reach the encoder: `itemcard.build_card` writes "Directed by X,
+starring Y" into the prose the encoder reads. So craft is not absent — it is **entangled**.
+One 256-dimensional vector carries a 900-character synopsis and a credits line together, and
+nothing lets the preference model put weight on the second without the first. A person whose
+taste runs on execution rather than premise has no way to express that.
+
+Giving craft its own block is what makes it separable, and separability is the whole low-data
+argument: a verdict then teaches the model about a *cinematographer* rather than about one
+film.
+
+#### Open design questions — decide before building
+
+1. **How is crew turned into a vector?** Three candidates. *(a)* A second encoded card,
+   crew-only, concatenated as a third tower — simple, reuses the encoder, but embeds names as
+   text, which the encoder has no real knowledge of. *(b)* Sparse one-hot per person — exact,
+   but tens of thousands of dimensions against 186 verdicts. *(c)* Factorise a
+   title-by-person matrix the way `cf.py` already factorises title-by-user, giving a dense
+   crew-similarity space where two films sharing a cinematographer sit close. **(c) is the
+   recommendation:** the machinery exists, it is the same shape of problem, and it degrades
+   gracefully for a person with one credit.
+2. **Which roles?** Director, cinematographer, editor, composer, production designer are the
+   measured-available set. Writer and cast are already present.
+3. **Does it earn its place?** It is a benchmark arm like any other, and per the rule this
+   document has now applied twice, it ships only if the held-out replay agrees. Nothing here
+   is believed before `ent eval` says so.
+4. **Does the LLM route survive?** Only as a later, separate question. Asking a model to
+   describe a film's craft from world knowledge needs no reviews, but it invents detail for
+   obscure titles and knows Hollywood far better than Kannada — reintroducing the bias that
+   the crew route avoids. Not ruled out; ruled *after*.
 
 ### Direction B — ask for comparisons, not ratings
 
