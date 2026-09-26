@@ -240,6 +240,58 @@ popularity baseline is hardest to beat and personalisation is worth least.
 The measurement that matters is `ent audit` on a real verdict log, and it
 cannot run until there is one.
 
+### Run five — 25 September 2026, after the population prior was cut
+
+`ent eval --users 300 --budget 30`, 300 held-out users, V-optimal elicitation. The population
+prior and its `entertainer-flat-prior` arm no longer exist; a new
+`entertainer-popular-negatives` arm was added to test one hypothesis, described below.
+
+| arm | NDCG@10 | P@10 | MAP@10 | novelty | diversity | serendipity |
+|---|---|---|---|---|---|---|
+| **entertainer** | **0.2094** ±0.0144 | 0.2588 | 0.1281 | 9.91 | 0.385 | 0.010 |
+| ridge | 0.2019 ±0.0140 | 0.2526 | 0.1246 | 10.05 | 0.385 | 0.013 |
+| entertainer, popular negatives | 0.1967 ±0.0137 | 0.2433 | 0.1213 | 10.45 | 0.415 | 0.021 |
+| weighted-kNN | 0.1938 ±0.0129 | 0.2412 | 0.1202 | 10.43 | 0.389 | 0.032 |
+| content-centroid | 0.1889 ±0.0127 | 0.2392 | 0.1136 | 10.62 | 0.398 | 0.032 |
+| popularity | 0.1571 ±0.0155 | 0.1835 | 0.0910 | 9.11 | 0.575 | 0.000 |
+| entertainer, no negatives | 0.0882 ±0.0125 | 0.0938 | 0.0471 | 14.48 | 0.579 | 0.024 |
+| quality-prior | 0.0427 ±0.0064 | 0.0567 | 0.0153 | 11.33 | 0.767 | 0.007 |
+
+```
+vs quality-prior                  Δ=+0.1668  p=0.0000  significant
+vs entertainer-no-negatives       Δ=+0.1213  p=0.0000  significant
+vs popularity                     Δ=+0.0523  p=0.0007  significant
+vs content-centroid               Δ=+0.0206  p=0.0252  significant
+vs weighted-kNN                   Δ=+0.0157  p=0.0648  not significant
+vs entertainer-popular-negatives  Δ=+0.0127  p=0.0336  significant
+vs ridge                          Δ=+0.0075  p=0.1781  not significant
+```
+
+**The engine is nominally ahead of ridge for the first time**, by +0.0075 at p=0.18 — which is
+not a result, it is a nominal lead inside the noise, and it is recorded that way. It beats
+popularity significantly (p=0.0007) where the previous run could not (p=0.064), and beats the
+content centroid. The weighted kNN is borderline.
+
+Do not compare these absolute numbers against run four. The population prior was removed
+between the two, so the arms are not the same estimator and, per the rule this document
+already records, arms move together when anything about the setup changes. The comparisons
+within this run stand.
+
+**The popular-negatives hypothesis is rejected.** The claim under test was that drawing the
+1,000 sampled negatives uniformly makes them mostly obscure titles, so the model is trained
+largely on "obscure, therefore not for you" while the real verdicts say "well known and
+acclaimed, still not for you" — and that the two disagree. Every part of that description is
+factually correct. The inference was wrong: sampling negatives from the region the real
+verdicts occupy measured **worse**, Δ=+0.0127 in favour of the uniform draw at p=0.034.
+
+"Obscure, therefore not for you" appears to be true and useful rather than a distortion. Most
+of a 73,541-title catalogue genuinely is not for any one person, and a model told the tail is
+uninteresting learns to avoid it. The secondary metrics agree: the popular-negatives arm has
+higher novelty (10.45 against 9.91) and higher diversity (0.415 against 0.385), so it does
+reach further into the catalogue exactly as designed, and is wrong more often when it does.
+
+Implicit negatives remain the largest effect in the project, now Δ=+0.1213 (p<0.0001).
+
 ### Prior runs
 
 Kept deliberately, because two of them were wrong in instructive ways.
@@ -249,7 +301,8 @@ Kept deliberately, because two of them were wrong in instructive ways.
 | first | 0.0036 | a degenerate fit — the compressed reward band collapsed every weight to zero |
 | second | 0.1623 | real, but against a broken kNN (0.003) and a ridge arm denied the sampled negatives |
 | third | 0.1607 | all arms given the same advantages; lost to ridge |
-| fourth | 0.1828 | the table above, after the regularisation fix; level with ridge |
+| fourth | 0.1828 | all arms level; the engine indistinguishable from ridge |
+| fifth | 0.2094 | the table above; population prior removed, nominally ahead of ridge at p=0.18 |
 
 The second run appeared to show the engine significantly beating ridge and
 the centroid. It did not; it showed two handicapped baselines. Fixing them
