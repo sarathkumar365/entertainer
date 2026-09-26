@@ -223,3 +223,31 @@ def test_the_slate_endpoint_reports_how_far_off_the_check_is(ready):
     assert body["outcomes"]["need"] == MIN_LOGGED
     with store.session(read_only=True) as con:
         assert body["outcomes"]["have"] == offpolicy.usable_count(con)
+
+
+def test_both_screens_are_told_the_same_threshold(app_env):  # noqa: F811
+    """Evidence hardcoded 30 while the slate endpoint sent MIN_LOGGED.
+
+    Two screens naming the same quantity from two sources is how they end up
+    disagreeing: raising MIN_LOGGED would have left Evidence reporting a closed
+    gap while the estimate still refused. Both now read it from the server, and
+    this pins that they read the *same* value.
+
+    Uses the full seed rather than the `ready` fixture because /api/audit
+    refuses below MIN_VERDICTS and answers no off-policy block at all.
+    """
+    from fastapi.testclient import TestClient
+    from test_cli_golden import SEED
+
+    from entertainer.web.app import create_app
+
+    cli, runner = app_env
+    teach(cli, runner, SEED)
+
+    client = TestClient(create_app())
+    slate = client.post("/api/recommendations/slate", json={"k": 3, "kind": "both"}).json()
+    audit = client.get("/api/audit")
+
+    assert slate["outcomes"]["need"] == MIN_LOGGED
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["off_policy"]["need"] == MIN_LOGGED
