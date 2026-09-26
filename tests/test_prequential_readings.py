@@ -95,7 +95,9 @@ def test_steps_with_nothing_to_beat_are_reported_and_excluded():
     rows = readings(res)
     discriminating = row(rows, "steps that could discriminate")
     assert discriminating.value == "10 of 20"
-    assert discriminating.reading == "10 had nothing to beat"
+    assert discriminating.reading == (
+        "10 had nothing to beat; the errors above still count them"
+    )
     assert discriminating.tone == "dim"
 
     # And the surviving ten all show the same +0.20 gain, so the trend is flat

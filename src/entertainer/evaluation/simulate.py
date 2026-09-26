@@ -335,7 +335,10 @@ def _negative_rows(fs, known, count, rng, popular: bool, rated_rows=None):
             # obscure films gets a correspondingly lower floor rather than
             # this cap overriding them upwards.
             depth = min(n - 1, max(count * 5, 1))
-            affordable = float(np.sort(votes)[::-1][depth])
+            # The depth-th largest vote count. `partition` is O(n) where a full
+            # sort is O(n log n), and this runs once per simulated user per arm
+            # over the whole catalogue.
+            affordable = float(-np.partition(-votes.astype(np.float64), depth)[depth])
             floor = min(wanted, affordable)
             candidates = np.flatnonzero(votes >= floor)
             if candidates.size >= count * 2:
@@ -397,8 +400,10 @@ def arm_taste(fs, meta, keep, answered, k):
 def arm_taste_popular_negatives(fs, meta, keep, answered, k):
     """The engine, with its sampled negatives drawn where the real ones live.
 
-    Isolates one change: negatives sampled proportional to log1p(votes) rather
-    than uniformly. See ``_negative_rows`` for why that might matter.
+    Isolates one change: negatives drawn from above a vote floor calibrated to
+    the titles this person has rated, rather than uniformly over the catalogue.
+    See ``_negative_rows`` — including why weighting by log1p(votes) was tried
+    first and discarded, so that this docstring is not read as describing it.
     """
     return _taste_arm(fs, meta, keep, answered, k, popular_negatives=True)
 

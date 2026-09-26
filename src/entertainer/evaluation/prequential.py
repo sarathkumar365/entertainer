@@ -254,13 +254,19 @@ def readings(
     # Steps where predicting the running average was already exactly right
     # cannot separate any two models. They are excluded from the trend, and
     # said so out loud when there are enough of them to change the reading.
+    #
+    # The note names the rows it applies to. It sits directly beneath the two
+    # error rows, which are means over *every* step, and without saying so it
+    # reads as though it qualifies them — which would understate the gap
+    # between model and control, since a step with nothing to beat contributes
+    # near-zero error to both.
     dropped = result.n - result.n_informative
     if dropped:
         out.append(
             Reading(
                 "steps that could discriminate",
                 f"{result.n_informative} of {result.n}",
-                f"{dropped} had nothing to beat",
+                f"{dropped} had nothing to beat; the errors above still count them",
                 "dim",
             )
         )

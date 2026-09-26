@@ -106,8 +106,11 @@ function OffPolicy({ result }) {
 
   if (result.status !== "ok") {
     if (result.status === "not-enough-data") {
-      const need = 30;
-      const left = need - result.n_usable;
+      // Sent by /api/audit rather than written here, so this page and the
+      // recommendations page cannot disagree about the same threshold. The
+      // fallback only covers a server older than the field.
+      const need = result.need ?? 30;
+      const left = Math.max(0, need - result.n_usable);
       return (
         <div className="offpolicy">
           <span className="label">Were the recommendations any good?</span>

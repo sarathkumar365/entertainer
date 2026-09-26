@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ... import store
 from ...errors import NotEnoughEvidence
 from ...evaluation import offpolicy
-from ...evaluation.prequential import MIN_VERDICTS
+from ...evaluation.prequential import MIN_LOGGED, MIN_VERDICTS
 from ...evaluation.prequential import readings as prequential_readings
 from ...evaluation.prequential import run as prequential
 from ..context import AppContext, get_context
@@ -137,6 +137,10 @@ def audit(interval: float = 0.90, ctx: AppContext = Depends(get_context)) -> dic
         "off_policy": {
             "status": policy.status,
             "n_usable": policy.n_usable,
+            # The threshold travels with the number it gates. Hardcoding 30 in
+            # the page let Evidence and the recommendations screen disagree
+            # about the same quantity the moment MIN_LOGGED moved.
+            "need": MIN_LOGGED,
             "logged_value": policy.logged_value,
             "estimate": policy.estimate,
             "better": policy.better,
