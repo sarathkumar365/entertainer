@@ -15,7 +15,7 @@ nothing or harmed on held-out users.
 | # | Idea | State |
 | --- | --- | --- |
 | 1 | ~~The engine only ever shows good films~~ — mostly not a problem, see the decision | **Closed**, but it exposed idea 3 |
-| 3 | 58% of the model's training signal says "obscure = not for me" | **Measured** — the real finding |
+| 3 | ~~58% of the training signal says "obscure = not for me"~~ | **Tested and rejected** — the uniform draw is better |
 | 2 | Give craft its own block in the item space | **Scoped** — see BACKLOG item 13 |
 
 ---
@@ -214,16 +214,66 @@ poorly calibrated. The model has learned a filter, not a taste.
 This is a hypothesis with a mechanism and numbers behind it. It is not established, and per
 this project's own record it must not be believed before the benchmark agrees.
 
-### What to try, in order
+### Tested 25 September 2026. The hypothesis is wrong.
 
-1. **Sample negatives from the same region the real verdicts live in.** Draw the 1,000 from
-   titles above a popularity or quality floor rather than uniformly, so the synthetic claim
-   becomes "well-regarded and well-known, still not for you" — the same claim the real
-   negatives make. One line in `_add_sampled_negatives`, and it is a benchmark arm like
-   everything else.
-2. **Weight by how surprising the negative is.** A title the model already predicts low
-   teaches nothing by being labelled low.
-3. **Revisit NEGATIVE_WEIGHT once 1 is answered.** The current 0.3 was tuned against uniform
-   negatives; if the draw changes, the weight that suited it probably does not.
+Built as the `entertainer-popular-negatives` arm — negatives drawn from the region the
+person's own verdicts occupy instead of uniformly — and run against 300 held-out users at a
+30-answer budget, every arm receiving identical answers.
 
-Cheap to test, and the arms exist. It goes to the backlog only if `ent eval` shows something.
+| arm | NDCG@10 |
+| --- | --- |
+| **entertainer** (uniform negatives, shipped) | **0.2094** ±0.0144 |
+| entertainer-popular-negatives | 0.1967 ±0.0137 |
+
+```
+vs entertainer-popular-negatives   Δ=+0.0127  p=0.0336  significant
+```
+
+**The uniform draw is better, significantly.** Not level, not noise — the change this file
+argued for makes the engine measurably worse.
+
+### Why the reasoning failed
+
+The mechanism was real and the numbers behind it were right. A uniform draw *is* dominated by
+obscure titles, it *does* outweigh every real verdict combined, and it *does* assert something
+different from what the real negatives assert. All of that held up. The inference from it did
+not.
+
+"Obscure, therefore not for you" turns out to be **true and useful**, not a distortion. Most of
+a 73,541-title catalogue is genuinely not for this person, and the long tail is genuinely where
+most of it lives. A model told that the tail is uninteresting learns to avoid it, and avoiding
+it is correct behaviour for a recommender. Replacing that signal with "well-known, still not
+for you" throws away a large, cheap, accurate prior in exchange for a smaller and subtler one.
+
+The secondary metrics support that reading rather than contradicting it. The popular-negatives
+arm has higher novelty (10.45 against 9.91) and higher diversity (0.415 against 0.385): it
+reaches further into the catalogue, exactly as intended, and it is wrong more often when it
+does.
+
+### What survives
+
+- **The observation that the two kinds of negative disagree is still true.** It just does not
+  follow that the disagreement is a problem — they are answering different questions and the
+  model appears able to use both.
+- **The explanation for ranking being real while score accuracy is not remains unexplained.**
+  This was offered as the cause and is not. It is still worth finding.
+- **The arm stays in `simulate.ARMS`.** It is the evidence, and a negative result kept in the
+  code is what stops the same idea being re-proposed in six months.
+- Two follow-ups from the original list are untested and now look less promising, but are not
+  ruled out: weighting a negative by how surprising it is, and revisiting `NEGATIVE_WEIGHT`.
+
+### What it cost to find out
+
+Two false starts, both caught by measuring the sampler rather than trusting it.
+
+`log1p(votes)` weighting was tried first and moved almost nothing — vote counts span four
+orders of magnitude, so the log compresses them to a 1.6x ratio and the draw's median went
+2,314 to 3,100 against a 17,130 target.
+
+Then a self-calibrating floor at the 25th percentile of the answered titles' votes
+**silently degenerated**: a replayed MovieLens user answers about blockbusters, so the floor
+landed at 1.67 million votes and left 25 eligible titles out of 73,541. The pool guard fired,
+the sampler fell back to uniform, and the arm scored byte-identically to the arm it was meant
+to test — `Δ=+0.0000, p=1.0000`. That is the dangerous shape of bug: it reports itself as a
+clean negative result. Had the exact zero not been questioned, this file would now record
+"tested, no effect" for an experiment that never ran.

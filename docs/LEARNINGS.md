@@ -44,6 +44,9 @@ general principle.
 - A leave-one-out sweep on 169 labels ranked the shipped negative-sample count last and a 10x smaller one best; the held-out benchmark reversed it, so the sweep was noise. Tune on held-out users, never on the label set the sweep scores against.
 - Benchmark arms move together between runs when the evaluated user sample changes: compare within a run against a baseline arm, never across runs on the absolute metric.
 - A component justified only by a synthetic result should be treated as on probation until the real benchmark agrees: the population prior was worth +0.46 correlation at n=4 on fixtures, measured at or below the arm omitting it on two consecutive held-out runs, and was cut.
+- A signal that looks like a distortion can be the load-bearing one: the 1,000 sampled negatives are drawn uniformly and therefore mostly obscure, which reads as "obscure means not for you" — replacing them with negatives drawn where the real verdicts live measured *worse*, Δ=+0.0127 p=0.034 in favour of the uniform draw.
+- An experiment that silently does not run reports itself as a clean negative result. A self-calibrating vote floor left 25 eligible titles out of 73,541, the pool guard fell back to uniform, and the new arm scored byte-identically to its control at Δ=+0.0000 p=1.0000. Question an exact zero before believing it.
+- Measure the knob, not just the outcome: weighting negatives by log1p(votes) looked like a popularity bias and moved the sampled median from 2,314 to 3,100 against a 17,130 target, because a log compresses four orders of magnitude to a 1.6x ratio.
 - Do not report a performance regression from a timing taken under load. A 582s test suite was 75s; load average was 23.7 on 12 cores because a benchmark, an ablation and a web app were running alongside it.
 
 ## External rating imports

@@ -225,3 +225,39 @@ def test_the_arm_roster_carries_no_population_prior(fake_movielens):
     replay did not reproduce. Nothing may reintroduce the arm silently."""
     assert "entertainer-flat-prior" not in simulate.ARMS
     assert "entertainer" in simulate.ARMS
+
+
+def test_the_popular_negatives_arm_actually_changes_the_draw(fake_movielens):
+    """A sampler that silently falls back reports itself as a clean negative.
+
+    The first working version of this arm degenerated: a replayed MovieLens
+    user answers about blockbusters, so a floor at the 25th percentile of their
+    votes landed at 1.67 million and left 25 eligible titles out of 73,541. The
+    pool guard fell back to a uniform draw, and the arm scored byte-identically
+    to the control it was meant to test — Δ=+0.0000, p=1.0000. The experiment
+    had not run, and nothing said so.
+
+    This asserts the two samplers disagree, which is the minimum for the arm to
+    be measuring anything at all.
+    """
+    import numpy as np
+
+    from entertainer.evaluation.simulate import _negative_rows
+
+    fs, _meta, item_map, _ = fake_movielens
+    if fs.columns is None:
+        pytest.skip("fixture space carries no catalogue columns")
+
+    rated = [i for i in list(item_map.values())[:20] if i in fs.index]
+    rated_rows = fs.rows_for(rated)
+    count = min(50, len(fs.item_ids) // 4)
+
+    uniform = _negative_rows(fs, set(), count, np.random.default_rng(0), False, rated_rows)
+    popular = _negative_rows(fs, set(), count, np.random.default_rng(0), True, rated_rows)
+
+    assert set(uniform.tolist()) != set(popular.tolist()), (
+        "the popular sampler fell back to uniform; the arm would measure nothing"
+    )
+    assert fs.columns.votes[popular].mean() > fs.columns.votes[uniform].mean(), (
+        "popular negatives must be drawn from better-known titles than a uniform draw"
+    )
