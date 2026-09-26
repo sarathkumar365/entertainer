@@ -38,6 +38,10 @@ good recommendations out of very few ratings. Item 14 is what the whole thing is
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
 
+Ideas that are not yet scheduled work live in [`IDEAS.md`](IDEAS.md), including a measured
+finding that the app only ever shows well-regarded films, so the model can never learn what
+bad looks like.
+
 ---
 
 ## 1. Taste page, phase one
