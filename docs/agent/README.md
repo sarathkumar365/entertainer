@@ -9,6 +9,7 @@ decided or proven.
 | Document | Holds | State |
 | --- | --- | --- |
 | [DESIGN.md](DESIGN.md) | Agent-wide decisions, phase by phase | Settled for the manual piece, 29 Sep 2026 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the manual piece is built: packages, threads, session ownership, jobs, phases | Decided 29 Sep 2026 |
 | [ACQUISITION.md](ACQUISITION.md) | Getting a judged title onto disk: the Telegram route, how it works, what the spike found | Spike done, 29 Sep 2026 |
 
 The manual piece — the user asks, the agent gets the film into Jellyfin — is designed. Still

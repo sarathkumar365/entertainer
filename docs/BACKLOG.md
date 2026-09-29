@@ -851,21 +851,23 @@ no idea", and a point estimate cannot.
 The source is settled: Telegram request groups, proven by the spike on 29 Sep 2026
 (`docs/agent/ACQUISITION.md`). The first piece is manual — the user asks for a title and the
 agent gets it into Jellyfin — because the engine is not yet good enough to act unsupervised
-(item 10). The design, phase by phase, is in `docs/agent/DESIGN.md`. Implementation order:
+(item 10). The design, phase by phase, is in `docs/agent/DESIGN.md`; the structure and the
+implementation phases are in `docs/agent/ARCHITECTURE.md`:
 
-1. **Promote the spike.** `acquire/` binds its settings through `config` (session path, library
-   directory, 3 GB cap, `ENTERTAINER_ACQUIRE` kill switch); `ent acquire login|get` replaces
-   `python -m entertainer.acquire`.
+1. **Contracts.** Settings through `config`, a `Source` Protocol, `Target` from the IMDb id,
+   `acquire()` split into `plan()` and `execute()`, the four spike review findings fixed,
+   `ent acquire login|get`, and a lock file so one process holds the Telegram session.
 2. **The decision rule.** Auto-pick at a score of 13 or more when the leading candidates agree;
    otherwise pause with the top three. Over-cap copies pause rather than download.
-3. **Jobs.** A job record and its action log under `data/acquire/jobs/`; one worker in the app
-   process, one job at a time; a job interrupted by a restart is marked failed and cleaned up.
-4. **The web front end.** "Get it" on any judged title, a job view with progress and the
-   action log, and the pause choice, "wrong file" and Cancel actions.
+3. **Jobs and worker.** A JSONL record per job under `data/acquire/jobs/`; one worker thread in
+   the app process; restart cleanup; a `request` verdict that drops the title from
+   recommendations.
+4. **The web front end.** "Get it" on any judged title and a Downloads page with progress, the
+   action log, the pause choice, "wrong file" and Cancel.
 5. **The join log and cleanup.** Every join recorded with the job that caused it; "leave joined
    channels" undoes them.
-6. **Evals.** Capture every job's candidates and outcome; an offline replay over the user's
-   twenty seed films, gating matcher changes on the wrong-pick count.
+6. **Evals.** An offline replay over the user's twenty seed films, gating matcher changes on the
+   wrong-pick count.
 7. **Jellyfin on the home server.** The library refresh, proven against the real server.
 
 North star: wrong-file rate under 5% after twenty jobs.
