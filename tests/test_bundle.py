@@ -48,14 +48,12 @@ def test_bundle_round_trips_the_catalogue(tmp_path, monkeypatch):
     _populate(store)
     np.save(config.PATHS.embeddings / "content_ids.npy", np.arange(40, dtype=np.int32))
     np.savez(config.PATHS.embeddings / "fused.npz", item_ids=np.arange(40))
-    np.savez(config.PATHS.artifacts / "population_prior.npz", mean=np.zeros(4))
 
     out = tmp_path / "b.zip"
     info = bundle.export(out, include_space=True)
     assert info.titles == 40
     assert "titles.parquet" in info.contents
     assert "fused.npz" in info.contents
-    assert "population_prior.npz" in info.contents
     assert out.stat().st_size > 0
 
     config2, store2, bundle2 = _fresh(tmp_path, monkeypatch, "target")
@@ -69,7 +67,55 @@ def test_bundle_round_trips_the_catalogue(tmp_path, monkeypatch):
     assert titles == 40
     assert sample == ("Film 7", "ko")
     assert (config2.PATHS.embeddings / "fused.npz").exists()
-    assert (config2.PATHS.artifacts / "population_prior.npz").exists()
+
+
+def test_a_bundle_carrying_the_old_population_prior_still_restores(tmp_path, monkeypatch):
+    """A build published before the population prior was cut must keep working.
+
+    `build-20260925-1806` was already on the releases repository when the prior
+    was removed, and its manifest lists `population_prior.npz` with a checksum.
+    `verify` walks the *manifest's* checksum list rather than this code's SPACE
+    tuple, so the file is still checked; the restore loop then simply does not
+    copy it out. Neither half may raise, or pulling that release would fail on
+    every machine.
+    """
+    config, store, bundle = _fresh(tmp_path, monkeypatch, "old-source")
+    _populate(store)
+    np.save(config.PATHS.embeddings / "content_ids.npy", np.arange(40, dtype=np.int32))
+    np.savez(config.PATHS.embeddings / "fused.npz", item_ids=np.arange(40))
+
+    out = tmp_path / "old.zip"
+    bundle.export(out, include_space=True)
+
+    # Rewrite the archive the way the older code would have written it: the
+    # prior file present, listed in `contents`, and checksummed.
+    prior = tmp_path / "population_prior.npz"
+    np.savez(prior, mean=np.zeros(4))
+    digest = bundle._digest(prior)
+
+    import json
+    import zipfile
+
+    rebuilt = tmp_path / "old-with-prior.zip"
+    with zipfile.ZipFile(out) as src, zipfile.ZipFile(rebuilt, "w") as dst:
+        manifest = json.loads(src.read(bundle.MANIFEST))
+        manifest["contents"].append("population_prior.npz")
+        manifest["sha256"]["population_prior.npz"] = digest
+        for item in src.infolist():
+            if item.filename == bundle.MANIFEST:
+                continue
+            dst.writestr(item, src.read(item.filename))
+        dst.writestr(bundle.MANIFEST, json.dumps(manifest))
+        dst.write(prior, "population_prior.npz")
+
+    config2, store2, bundle2 = _fresh(tmp_path, monkeypatch, "old-target")
+    assert "population_prior.npz" in bundle2.inspect(rebuilt)["contents"]
+    manifest = bundle2.restore(rebuilt)
+
+    assert manifest["restored_titles"] == 40
+    assert (config2.PATHS.embeddings / "fused.npz").exists()
+    # Verified on the way in, then dropped: nothing reads it any more.
+    assert not (config2.PATHS.artifacts / "population_prior.npz").exists()
 
 
 def test_bundle_refuses_to_clobber_recorded_verdicts(tmp_path, monkeypatch):

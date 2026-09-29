@@ -169,7 +169,6 @@ def _artefacts() -> Check:
     have = {
         "catalogue": PATHS.catalog_db.exists(),
         "item space": fusion.exists(),
-        "population prior": (PATHS.artifacts / "population_prior.npz").exists(),
     }
     missing = [name for name, present in have.items() if not present]
     if not missing:

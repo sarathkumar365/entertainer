@@ -191,7 +191,7 @@ def onboard(
 
         session = ElicitationSession(
             fs=fs, meta=meta, pool=pool, asked=asked, languages=langs,
-            prior=engine.prior(con), target=questions,
+            target=questions,
         )
         session.start()
 

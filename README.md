@@ -189,38 +189,9 @@ preferring curvature, which is exactly right.
 coherent hypothesis is drawn per slate and played out, rather than hedging
 towards the safe middle.
 
-### 3b. The prior knows what taste looks like
-
-An isotropic prior asserts something obviously false: that on day one, before
-any evidence, every direction in taste space is equally plausible. Real
-preference vectors live on a thin, structured manifold — nobody's taste is a
-random direction in 192 dimensions.
-
-MovieLens holds two hundred thousand examples of what a real preference vector
-looks like. Fitting one weight vector per user *in the same fused space*, then
-taking the mean and covariance of that population, gives a prior that already
-knows the shape of human taste before its own user has answered anything. This
-is empirical Bayes at the population level, and it stays fully closed form: a
-block-diagonal reparameterisation folds the population covariance into the
-isotropic problem already being solved.
-
-The payoff sits exactly where it is needed. Past forty answers the likelihood
-dominates and the prior barely registers. At five, the prior is most of the
-posterior, and the difference between "any direction is equally likely" and
-"directions look like this" is the difference between a useful first slate and
-a random one.
-
-One subtlety cost some measurement to find. Estimating the prior precision by
-maximum likelihood — correct, and what the model does everywhere else —
-collapses at small n in the badly-conditioned whitened basis and produces a
-confidently wrong direction. Anchoring it with a weak hyperprior turns a 0.39
-correlation *loss* at n=4 into a 0.46 gain, and still decays to nothing by
-n=64. The benchmark runs the engine with and without the population prior as
-separate arms, so the gain is measured rather than claimed.
-
 ### 4. Cold start
 
-On day one the posterior is the prior, so the engine has to ask. Asking costs
+On day one there is no evidence at all, so the engine has to ask. Asking costs
 your patience, the scarcest resource in the system, so the question is never
 "which titles are good" but "which titles, once answered, most reduce
 uncertainty about this person".
@@ -326,9 +297,8 @@ fixed answer budget the ranking is scored against their held-out ratings.
   Elicitation is measured separately by varying the budget.
 
 Baselines: popularity, shrunk quality prior, liked-item centroid, rating-
-weighted kNN, plain ridge regression on identical features (the model minus
-its Bayes), and the full engine with an isotropic prior (the model minus its
-population knowledge). Reported with NDCG/precision/MAP/MRR **and** novelty,
+weighted kNN, and plain ridge regression on identical features (the model
+minus its Bayes). Reported with NDCG/precision/MAP/MRR **and** novelty,
 diversity and serendipity, so an accuracy gain bought by collapsing onto the
 canon is visible rather than hidden. Significance by paired bootstrap.
 

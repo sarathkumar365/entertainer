@@ -1,14 +1,13 @@
-┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ component          ┃ state                            ┃
-┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ catalog            │ ready                            │
-│ content embeddings │ ready                            │
-│ cf factors         │ ready                            │
-│ fused space        │ ready                            │
-│ taste model        │ missing                          │
-│ population prior   │ absent  optional: ent data prior │
-│ tmdb credentials   │ absent                           │
-└────────────────────┴──────────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ component          ┃ state   ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ catalog            │ ready   │
+│ content embeddings │ ready   │
+│ cf factors         │ ready   │
+│ fused space        │ ready   │
+│ taste model        │ missing │
+│ tmdb credentials   │ absent  │
+└────────────────────┴─────────┘
 ┏━━━━━━━━━━━━━┳━━━━━━━┓
 ┃ metric      ┃ value ┃
 ┡━━━━━━━━━━━━━╇━━━━━━━┩

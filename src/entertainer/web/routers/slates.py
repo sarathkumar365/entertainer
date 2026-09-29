@@ -38,6 +38,8 @@ def recommendation_slate(
     """Create and log an observational production slate with propensities."""
     request = body or SlateRequest(k=k)
     from ...engine import liked_titles
+    from ...evaluation import offpolicy
+    from ...evaluation.prequential import MIN_LOGGED
     from ...recommend import Filters, attach_reasons, produce_slate
 
     with store.session() as con:
@@ -76,11 +78,16 @@ def recommendation_slate(
         # tens of megabytes. Fetching full rows for the handful actually
         # recommended is what makes them renderable.
         rows = store.item_rows(con, slate.item_ids)
+        # How close the off-policy check is to being able to run. The page says
+        # so, because a verdict given here is the only kind that moves this
+        # number and nothing on any screen used to mention that.
+        outcomes = offpolicy.usable_count(con)
 
     return {
         "slate_id": slate.slate_id,
         "observational": True,
         "kind": request.kind,
+        "outcomes": {"have": outcomes, "need": MIN_LOGGED},
         "items": [
             {
                 **present(rows.get(r.item_id) or meta[r.item_id]),

@@ -158,3 +158,96 @@ def test_estimating_does_not_persist_a_model(ready):
     with store.session(read_only=True) as con:
         offpolicy.estimate(con, engine, fs)
     assert not saved.exists(), "a measurement persisted a model"
+
+
+
+def test_usable_count_agrees_with_what_the_estimate_waits_for(ready):
+    """The screens say "16 of 30" and the estimate refuses below 30. Both must
+    be counting the same thing.
+
+    ``usable_count`` exists so the recommendations page can show the gap on
+    every slate without paying for the model refit ``estimate`` does. Deriving
+    it from a second query would let the two drift, and a page promising the
+    check at thirty beside a check that refuses at thirty is the kind of
+    contradiction this project has already had to fix once.
+    """
+    engine, fs = ready
+    ids = [int(i) for i in fs.item_ids[:4]]
+    with store.session() as con:
+        slate_id = store.new_slate_id()
+        store.log_impressions(
+            con, slate_id,
+            [(i, n, 1.0, 0.2, False) for n, i in enumerate(ids)],
+            policy="test",
+        )
+        for item_id in ids:
+            engine.record(con, item_id, "like", source="web", context={"slate_id": slate_id})
+
+    with store.session(read_only=True) as con:
+        assert offpolicy.usable_count(con) == 4
+        assert offpolicy.estimate(con, engine, fs).n_usable == offpolicy.usable_count(con)
+
+
+def test_the_count_costs_no_model_fit(ready):
+    """It is read on every recommendations page view. A refit there would make
+    the slate endpoint as slow as the audit page."""
+    engine, fs = ready
+    ids = [int(i) for i in fs.item_ids[:3]]
+    with store.session() as con:
+        log_slate(con, ids)
+        for item_id in ids:
+            engine.record(con, item_id, "like", source="test")
+
+    class _NoFit:
+        def fit(self, con, save=False):
+            raise AssertionError("counting must not need a model")
+
+    with store.session(read_only=True) as con:
+        assert offpolicy.usable_count(con) == 3
+        # And the estimate itself must refuse before it ever reaches a fit.
+        assert offpolicy.estimate(con, _NoFit(), fs).status == "not-enough-data"
+
+
+def test_the_slate_endpoint_reports_how_far_off_the_check_is(ready):
+    """The recommendations page says a verdict there is worth more than the
+    same verdict elsewhere, and shows the gap. That number rides on the slate
+    response so the page needs no second request to draw it."""
+    from fastapi.testclient import TestClient
+
+    from entertainer.web.app import create_app
+
+    engine, fs = ready
+    client = TestClient(create_app())
+    body = client.post("/api/recommendations/slate", json={"k": 3, "kind": "both"}).json()
+
+    assert body["outcomes"]["need"] == MIN_LOGGED
+    with store.session(read_only=True) as con:
+        assert body["outcomes"]["have"] == offpolicy.usable_count(con)
+
+
+def test_both_screens_are_told_the_same_threshold(app_env):  # noqa: F811
+    """Evidence hardcoded 30 while the slate endpoint sent MIN_LOGGED.
+
+    Two screens naming the same quantity from two sources is how they end up
+    disagreeing: raising MIN_LOGGED would have left Evidence reporting a closed
+    gap while the estimate still refused. Both now read it from the server, and
+    this pins that they read the *same* value.
+
+    Uses the full seed rather than the `ready` fixture because /api/audit
+    refuses below MIN_VERDICTS and answers no off-policy block at all.
+    """
+    from fastapi.testclient import TestClient
+    from test_cli_golden import SEED
+
+    from entertainer.web.app import create_app
+
+    cli, runner = app_env
+    teach(cli, runner, SEED)
+
+    client = TestClient(create_app())
+    slate = client.post("/api/recommendations/slate", json={"k": 3, "kind": "both"}).json()
+    audit = client.get("/api/audit")
+
+    assert slate["outcomes"]["need"] == MIN_LOGGED
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["off_policy"]["need"] == MIN_LOGGED

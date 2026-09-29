@@ -170,7 +170,7 @@ def _run_elicitation(
             ids = np.array([a[0] for a in answered])
             rewards = np.array([a[1] for a in answered])
             model = fit_taste(
-                fs.vectors_for(ids), rewards, allow_rff=False, prior=_ACTIVE_PRIOR
+                fs.vectors_for(ids), rewards, allow_rff=False
             )
             batch = elicit.next_questions(
                 model, fs, meta, asked, k=cfg.seed_questions, pool=pool,
@@ -284,7 +284,74 @@ def arm_ridge(fs, meta, keep, answered, k):
 NEGATIVE_SAMPLES = int(os.environ.get("ENTERTAINER_NEGATIVE_SAMPLES", "1000"))
 
 
-def _with_negatives(fs, ids, rewards, seed=0):
+def _negative_rows(fs, known, count, rng, popular: bool, rated_rows=None):
+    """Which unrated titles stand in for "not for me".
+
+    ``popular=False`` is the shipped behaviour: a uniform draw over the
+    catalogue. ``popular=True`` is the arm testing whether that draw says the
+    wrong thing.
+
+    The concern is that a uniform draw is not a neutral sample of "titles you
+    have not rated" — it is a sample of the catalogue's centre of mass, which
+    is obscure and middling. On the author's own catalogue a uniform draw
+    averages IMDb 6.40 at a median 2,582 votes, while the titles he actually
+    rated negatively average 7.54 at a median 17,130. The synthetic negatives
+    therefore assert "obscure, therefore not for you" where the real ones
+    assert "well known and acclaimed, still not for you", and at weight 0.3
+    the synthetic block outweighs every real verdict combined.
+
+    The fix is to draw from the region this person's own verdicts occupy, so
+    both kinds of negative make the same claim. The floor is the 25th
+    percentile of the votes on the titles they have rated — self-calibrating
+    per person, with no constant tuned against the outcome. That matters: this
+    project has twice recorded an in-sample hyperparameter choice reversing
+    under held-out evaluation.
+
+    Weighting by ``log1p(votes)`` was tried first and rejected on measurement,
+    not taste. Vote counts span four orders of magnitude, so the log compresses
+    them to a 1.6x ratio and the draw barely moved — median votes went 2,314 to
+    3,100 against a 17,130 target, with the rating distribution unchanged.
+
+    The floor is then **relaxed until the pool is large enough to sample**, and
+    that is not a detail. A replayed MovieLens user answers about blockbusters,
+    so the quarter-percentile of their votes lands at 1.67 million and leaves
+    twenty-five eligible titles in a 73,541-title catalogue. Taken literally the
+    rule degenerates; without the relaxation the arm silently fell back to a
+    uniform draw and scored byte-identically to the arm it was meant to test,
+    which is a failure that reports itself as a result.
+    """
+    n = len(fs.item_ids)
+    count = min(count, n)
+    eligible = None
+    if popular and fs.columns is not None and rated_rows is not None and len(rated_rows):
+        votes = fs.columns.votes
+        rated_votes = votes[rated_rows]
+        rated_votes = rated_votes[rated_votes > 0]
+        if rated_votes.size:
+            wanted = float(np.quantile(rated_votes, 0.25))
+            # The most selective floor that still leaves a pool several times
+            # the sample: sort descending and take the vote count at that
+            # depth. `min` with the wanted floor means a person who rates
+            # obscure films gets a correspondingly lower floor rather than
+            # this cap overriding them upwards.
+            depth = min(n - 1, max(count * 5, 1))
+            # The depth-th largest vote count. `partition` is O(n) where a full
+            # sort is O(n log n), and this runs once per simulated user per arm
+            # over the whole catalogue.
+            affordable = float(-np.partition(-votes.astype(np.float64), depth)[depth])
+            floor = min(wanted, affordable)
+            candidates = np.flatnonzero(votes >= floor)
+            if candidates.size >= count * 2:
+                eligible = candidates
+
+    if eligible is None:
+        rows = rng.choice(n, size=count, replace=False)
+    else:
+        rows = eligible[rng.choice(eligible.size, size=count, replace=False)]
+    return np.array([r for r in rows if int(fs.item_ids[r]) not in known], dtype=np.int64)
+
+
+def _with_negatives(fs, ids, rewards, seed=0, popular=False):
     """Append sampled unrated titles as weak negatives.
 
     Mirrors what the engine does at serving time. Without this the model has
@@ -295,9 +362,8 @@ def _with_negatives(fs, ids, rewards, seed=0):
 
     rng = np.random.default_rng(seed)
     known = set(int(i) for i in ids)
-    count = min(NEGATIVE_SAMPLES, len(fs.item_ids))
-    rows = rng.choice(len(fs.item_ids), size=count, replace=False)
-    rows = np.array([r for r in rows if int(fs.item_ids[r]) not in known], dtype=np.int64)
+    rated_rows = fs.rows_for(ids) if popular else None
+    rows = _negative_rows(fs, known, NEGATIVE_SAMPLES, rng, popular, rated_rows)
 
     X = np.vstack([fs.vectors_for(ids), fs.matrix[rows]])
     y = np.concatenate([rewards, np.full(rows.size, NEGATIVE_REWARD)])
@@ -305,44 +371,41 @@ def _with_negatives(fs, ids, rewards, seed=0):
     return X, y, w
 
 
-def _taste_arm(fs, meta, keep, answered, k, prior, negatives=True):
+def _taste_arm(fs, meta, keep, answered, k, negatives=True, popular_negatives=False):
     if len(answered) < 3:
         return arm_quality(fs, meta, keep, answered, k)
     ids = np.array([a[0] for a in answered])
     rewards = np.array([a[1] for a in answered])
     if negatives:
-        X, y, w = _with_negatives(fs, ids, rewards)
+        X, y, w = _with_negatives(fs, ids, rewards, popular=popular_negatives)
     else:
         X, y, w = fs.vectors_for(ids), rewards, None
     model = fit_taste(
-        X, y, sample_weight=w, prior=prior, capacity_obs=len(rewards)
+        X, y, sample_weight=w, capacity_obs=len(rewards)
     )
     mean = model.predict(fs.matrix, with_std=False)
     return _rank(mean, keep, fs, k)
 
 
-def arm_taste_flat(fs, meta, keep, answered, k):
-    """The engine with an isotropic prior: no population knowledge at all."""
-    return _taste_arm(fs, meta, keep, answered, k, prior=None)
-
-
 def arm_taste_no_negatives(fs, meta, keep, answered, k):
     """The engine without sampled negatives: positives-only regression."""
-    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR, negatives=False)
+    return _taste_arm(fs, meta, keep, answered, k, negatives=False)
 
 
 def arm_taste(fs, meta, keep, answered, k):
-    """The engine: evidence-tuned Bayesian posterior over a population prior.
+    """The engine: evidence-tuned Bayesian posterior over the fused space."""
+    return _taste_arm(fs, meta, keep, answered, k)
 
-    The prior is injected by ``run`` rather than loaded here, so that the
-    replay can guarantee it was fitted without the simulated user's own
-    opinions in it.
+
+def arm_taste_popular_negatives(fs, meta, keep, answered, k):
+    """The engine, with its sampled negatives drawn where the real ones live.
+
+    Isolates one change: negatives drawn from above a vote floor calibrated to
+    the titles this person has rated, rather than uniformly over the catalogue.
+    See ``_negative_rows`` — including why weighting by log1p(votes) was tried
+    first and discarded, so that this docstring is not read as describing it.
     """
-    return _taste_arm(fs, meta, keep, answered, k, prior=_ACTIVE_PRIOR)
-
-
-# Set by ``run``; module-level so the arm signature stays uniform.
-_ACTIVE_PRIOR = None
+    return _taste_arm(fs, meta, keep, answered, k, popular_negatives=True)
 
 
 ARMS = {
@@ -351,8 +414,8 @@ ARMS = {
     "content-centroid": arm_content_centroid,
     "weighted-kNN": arm_weighted_knn,
     "ridge": arm_ridge,
-    "entertainer-flat-prior": arm_taste_flat,
     "entertainer-no-negatives": arm_taste_no_negatives,
+    "entertainer-popular-negatives": arm_taste_popular_negatives,
     "entertainer": arm_taste,
 }
 
@@ -364,11 +427,8 @@ def run(
     cfg: SimConfig,
     arms: Sequence[str] = tuple(ARMS),
     elicitation: str = "v-optimal",
-    prior=None,
 ) -> dict[str, ArmResult]:
     """``elicitation``: v-optimal | d-optimal | random."""
-    global _ACTIVE_PRIOR
-    _ACTIVE_PRIOR = prior
     if elicitation in ("v-optimal", "d-optimal"):
         cfg = SimConfig(**{**cfg.__dict__, "criterion": elicitation})
     rng = np.random.default_rng(cfg.seed)

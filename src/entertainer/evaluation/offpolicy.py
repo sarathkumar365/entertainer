@@ -48,12 +48,16 @@ class OffPolicy:
         return self.estimate > self.logged_value
 
 
-def estimate(con, engine, fs) -> OffPolicy:
-    """Join logged impressions to the verdicts that followed them.
+def _usable_rows(con) -> list[tuple[int, float, float]]:
+    """Logged impressions joined to the verdicts that followed them.
 
     Only impressions with a positive propensity are usable: a zero would
     divide by zero, and a missing one means the slate predates propensity
     logging.
+
+    Split out from ``estimate`` because it is pure SQL and cheap, while the
+    rest of ``estimate`` refits the model. ``usable_count`` needs the count on
+    every recommendations page view and must not pay for a fit to get it.
     """
     # Two joins, and the exact one wins where it applies.
     #
@@ -98,8 +102,30 @@ def estimate(con, engine, fs) -> OffPolicy:
         if slate_id not in claimed
     ]
 
-    usable = [(float(reward), float(p), 0.0) for _, p, reward in rows if p and p > 0]
-    item_ids = [int(item_id) for item_id, p, _ in rows if p and p > 0]
+    return [
+        (int(item_id), float(p), float(reward))
+        for item_id, p, reward in rows
+        if p and p > 0
+    ]
+
+
+def usable_count(con) -> int:
+    """How many logged recommendations have an outcome.
+
+    The number the off-policy estimate is waiting on, without the fit it would
+    otherwise cost. Derived from the same join as the estimate so the two
+    cannot disagree about what counts — a screen saying "22 of 30" beside an
+    estimate that refuses at 22 would be the kind of contradiction this
+    project has already had to fix once.
+    """
+    return len(_usable_rows(con))
+
+
+def estimate(con, engine, fs) -> OffPolicy:
+    """What today's model would have scored on the slates already shown."""
+    rows = _usable_rows(con)
+    usable = [(reward, p, 0.0) for _, p, reward in rows]
+    item_ids = [item_id for item_id, _, _ in rows]
 
     if len(usable) < MIN_LOGGED:
         return OffPolicy(status="not-enough-data", n_usable=len(usable))

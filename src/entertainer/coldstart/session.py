@@ -49,7 +49,6 @@ class ElicitationSession:
     pool: np.ndarray
     asked: set[int]
     languages: tuple[str, ...] = ()
-    prior: object | None = None
     target: int = 40
 
     answered: list[tuple[int, float]] = field(default_factory=list)
@@ -78,7 +77,7 @@ class ElicitationSession:
             ids = np.array([a[0] for a in self.answered])
             rewards = np.array([a[1] for a in self.answered])
             model = fit_taste(
-                self.fs.vectors_for(ids), rewards, allow_rff=False, prior=self.prior
+                self.fs.vectors_for(ids), rewards, allow_rff=False
             )
             self._batch = elicit.next_questions(
                 model, self.fs, self.meta, self.asked,

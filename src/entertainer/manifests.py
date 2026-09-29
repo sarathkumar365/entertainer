@@ -40,7 +40,6 @@ def write(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         "artifacts": {
             "catalogue": _digest(PATHS.catalog_db),
             "fused": _digest(fused_path()),
-            "prior": _digest(PATHS.artifacts / "population_prior.npz"),
         },
         **payload,
     }
