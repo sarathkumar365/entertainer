@@ -87,3 +87,6 @@ general principle.
 - An SVG `<animate>` element keeps the document from ever reporting itself settled, which breaks anything waiting for a stable frame. Use CSS.
 - A single-page app needs a catch-all route or every URL 404s on reload — and the catch-all must exclude the API, or a mistyped endpoint resolves with HTML and fails far from the cause.
 
+- A Telegram "movie channel" was a request group: no files in it, only filter bots that reply to a posted title and deliver by private message. Drive the bot; searching the group finds nothing. See `docs/agent/ACQUISITION.md`.
+- A filter bot sends the file and then a fresh join demand a second later. Reading its chat newest first joined channels forever and never saw the file. Read oldest first; a file wins.
+- File messages from those bots carry promotional channel buttons. Following every `t.me` link as a join demand joined ad channels on the user's account. Follow join links only on a file-less message that asks for a join.

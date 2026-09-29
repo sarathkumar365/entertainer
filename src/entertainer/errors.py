@@ -67,3 +67,11 @@ class MissingCredentials(EntertainerError):
 
 class MissingDependency(EntertainerError):
     """An optional extra this step needs was never installed."""
+
+
+class NotAcquired(EntertainerError):
+    """No source produced a file that matched and verified.
+
+    Distinct from a failure: declining a doubtful file is the agent working.
+    A wrong film in the library costs trust; a missing one costs nothing.
+    """
