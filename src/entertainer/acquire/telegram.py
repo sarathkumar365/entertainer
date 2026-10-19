@@ -6,66 +6,96 @@ both, and is what the "paste a name, get a file" bots are themselves built on â€
 they index channel posts and resend by ``file_id``. Searching the channels
 directly uses the same data without depending on a bot's UI.
 
-Channels come from ``ENTERTAINER_TG_CHANNELS`` and nowhere else. Which channels
-are acceptable is the user's decision, made in configuration.
+Channels searched come from ``ENTERTAINER_TG_CHANNELS`` and request groups
+posted in from ``ENTERTAINER_TG_GROUPS``, and nowhere else. Which ones are
+acceptable is the user's decision, made in configuration.
 
 Login is interactive once (phone number and code, typed by the person), after
-which the session file under the data directory is reused. Use a secondary
-account: automated user clients can be rate-limited or flagged.
+which the session file is reused. Every source in a job shares one client
+behind one lock (``connect``): two clients on one session file is how a session
+gets revoked.
 """
 
 from __future__ import annotations
 
+import fcntl
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
-from ..config import PATHS
-from ..errors import MissingCredentials, MissingDependency
+from ..config import AcquireSettings
+from ..errors import AcquireBusy, MissingCredentials, MissingDependency
 from .match import VIDEO_EXTS, Candidate, Target
 
 
-def session_path() -> Path:
-    return PATHS.root / "telegram" / "acquire"
+@contextmanager
+def session_lock(settings: AcquireSettings) -> Iterator[None]:
+    """Hold the Telegram session for this process, or refuse at once.
+
+    Held for one job, not for the life of the app, so the CLI can still
+    acquire whenever the web app is idle. ``flock`` is released by the kernel
+    if the process dies, so a crash never leaves a stale lock behind.
+    """
+    settings.tg_lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(settings.tg_lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise AcquireBusy(
+                "Another process is using the Telegram session, usually the app running a job. "
+                "Wait for it to finish, or use the web page."
+            ) from None
+        yield
+    finally:
+        os.close(fd)
 
 
-def channels() -> list[str]:
-    raw = os.environ.get("ENTERTAINER_TG_CHANNELS", "")
-    return [c.strip() for c in raw.split(",") if c.strip()]
-
-
-def client():
+def client(settings: AcquireSettings):
     try:
         from telethon import TelegramClient
     except ImportError as e:
         raise MissingDependency("Install the acquire extra: uv pip install -e '.[acquire]'") from e
-    api_id, api_hash = os.environ.get("TELEGRAM_API_ID"), os.environ.get("TELEGRAM_API_HASH")
-    if not (api_id and api_hash):
+    if not (settings.tg_api_id and settings.tg_api_hash):
         raise MissingCredentials(
             "Set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env (from my.telegram.org)."
         )
-    session_path().parent.mkdir(parents=True, exist_ok=True)
-    return TelegramClient(str(session_path()), int(api_id), api_hash)
+    settings.tg_session.parent.mkdir(parents=True, exist_ok=True)
+    return TelegramClient(str(settings.tg_session), int(settings.tg_api_id), settings.tg_api_hash)
+
+
+@asynccontextmanager
+async def connect(settings: AcquireSettings) -> AsyncIterator:
+    """One locked, logged-in client, shared by every Telegram source in a job."""
+    with session_lock(settings):
+        c = client(settings)
+        await c.connect()
+        try:
+            if not await c.is_user_authorized():
+                raise MissingCredentials("Telegram is not logged in. Run: ent acquire login")
+            yield c
+        finally:
+            await c.disconnect()
+            # The session holds full control of the account.
+            for f in settings.tg_session.parent.glob(settings.tg_session.name + "*"):
+                f.chmod(0o600)
 
 
 class TelegramSource:
     name = "telegram"
 
-    def __init__(self, chans: list[str] | None = None, per_query: int = 40):
-        self.chans = chans if chans is not None else channels()
+    def __init__(self, client, chans: tuple[str, ...] | list[str], per_query: int = 40):
+        self._client = client
+        self.chans = list(chans)
         self.per_query = per_query
-        self._client = None
 
     async def __aenter__(self):
-        self._client = client()
-        await self._client.connect()
-        if not await self._client.is_user_authorized():
-            await self._client.disconnect()
-            raise MissingCredentials(
-                "Telegram is not logged in. Run: python -m entertainer.acquire login"
-            )
         self.chans = await self._resolve(self.chans)
         return self
+
+    async def __aexit__(self, *exc):
+        pass  # the client belongs to whoever connected it
 
     async def _resolve(self, names: list[str]) -> list:
         """Accept @usernames, t.me links, or a channel's display title.
@@ -87,9 +117,6 @@ class TelegramSource:
                 "or name it by @username or t.me link."
             )
         return [found.get(n, n) for n in names]
-
-    async def __aexit__(self, *exc):
-        await self._client.disconnect()
 
     async def search(self, target: Target) -> list[Candidate]:
         out: list[Candidate] = []
@@ -124,7 +151,7 @@ def _queries(target: Target) -> list[str]:
 def _candidate(msg) -> Candidate | None:
     f = msg.file
     name = f.name or ""
-    ext = (f.ext or "").lstrip(".").lower() or name.rsplit(".", 1)[-1].lower()
+    ext = _ext(f)
     is_video = (f.mime_type or "").startswith("video/") or ext in VIDEO_EXTS
     if not is_video:
         return None
@@ -155,17 +182,18 @@ class BotGroupSource:
     name = "telegram-bot"
     _SIZE = {"KB": 1 << 10, "MB": 1 << 20, "GB": 1 << 30}
 
-    def __init__(self, chans: list[str] | None = None, pages: int = 2, wait: float = 30.0):
-        self.inner = TelegramSource(chans)
+    def __init__(self, client, groups: tuple[str, ...] | list[str], pages: int = 2,
+                 wait: float = 30.0):
+        self._client = client
+        self.inner = TelegramSource(client, groups)
         self.pages, self.wait = pages, wait
 
     async def __aenter__(self):
         await self.inner.__aenter__()
-        self._client = self.inner._client
         return self
 
     async def __aexit__(self, *exc):
-        await self.inner.__aexit__(*exc)
+        pass
 
     async def search(self, target: Target) -> list[Candidate]:
         out: list[Candidate] = []
@@ -218,6 +246,9 @@ class BotGroupSource:
             if msg is None:
                 raise RuntimeError(f"@{bot} sent nothing within {self.wait:.0f}s")
             if msg.file:
+                # The button label often carries no extension; the delivered
+                # file does, and it decides what the library copy is called.
+                cand.ext = _ext(msg.file) or cand.ext
                 await self._client.download_media(
                     msg, file=str(dest),
                     progress_callback=(lambda d, t: progress(d, t)) if progress else None)
@@ -339,12 +370,18 @@ def _next_page(msg) -> bytes | None:
     return None
 
 
+def _ext(f) -> str:
+    ext = (f.ext or "").lstrip(".").lower()
+    if not ext and "." in (f.name or ""):
+        ext = f.name.rsplit(".", 1)[-1].lower()
+    return ext
+
+
 def _is_video(msg) -> bool:
     f = getattr(msg, "file", None)
     if not f:
         return False
-    ext = (f.ext or "").lstrip(".").lower() or (f.name or "").rsplit(".", 1)[-1].lower()
-    return (f.mime_type or "").startswith("video/") or ext in VIDEO_EXTS
+    return (f.mime_type or "").startswith("video/") or _ext(f) in VIDEO_EXTS
 
 
 def _join_links(msg) -> list[str]:

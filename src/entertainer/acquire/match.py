@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 VIDEO_EXTS = frozenset({"mkv", "mp4", "avi", "m4v", "mov", "webm", "ts", "mpg", "mpeg", "ogv"})
-_JUNK = re.compile(r"\b(sample|trailer|teaser|promo|preview)\b", re.I)
+# Extras carry the film's full title and year, and score as the film until
+# ffprobe rejects them after a wasted download and a used-up try.
+_JUNK = re.compile(
+    r"\b(sample|trailer|teaser|promo|preview|behind the scenes|deleted scenes|featurettes?"
+    r"|making of|bonus features?)\b",
+    re.I,
+)
 
 # 1080p first: 2160p roughly quadruples disk for a difference most home screens
 # do not show, and the disk budget is the scarcer resource for an unsupervised agent.
@@ -64,7 +70,7 @@ def parse(label: str) -> dict:
 def score(target: Target, cand: Candidate) -> Candidate:
     """Fill ``cand.score``; zero means refused, with the reason in ``why``."""
     if _JUNK.search(cand.label):
-        return _refuse(cand, "sample or trailer")
+        return _refuse(cand, "sample, trailer or extra")
     info = parse(cand.label)
     ext = (cand.ext or str(info.get("container") or "")).lower().lstrip(".")
     if ext and ext not in VIDEO_EXTS:

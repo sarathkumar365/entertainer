@@ -13,9 +13,10 @@ data/library/Movies/Vikram (2022)/Vikram (2022).mkv
 ```
 
 ```bash
-.venv/bin/python -m entertainer.acquire login                     # once, interactive
-.venv/bin/python -m entertainer.acquire get "Vikram" --year 2022 --dry-run
-.venv/bin/python -m entertainer.acquire get "Vikram" --year 2022 --sources telegram-bot
+ent acquire login                                    # once, interactive
+ent acquire get "Vikram 2022" --dry-run
+ent acquire get "Vikram 2022" --sources telegram-bot
+ent acquire get --imdb <tt-id>                       # a film the catalogue lacks
 ```
 
 ---
@@ -152,8 +153,8 @@ ahead of time, and a reason not to make acquisition interactive.
   should leave them.
 - **Disk.** The development machine had about 17 GB free. The disk budget and eviction rule
   are the next thing that bites.
-- **Not yet a real command.** `python -m entertainer.acquire` is the spike's entry point.
-  `ent acquire` and a web route wait on the agent's architecture.
+- ~~**Not yet a real command.**~~ `ent acquire` replaced `python -m entertainer.acquire` in
+  phase 1 of `ARCHITECTURE.md`; the web route is phase 4.
 
 ## Telegram MCP servers
 

@@ -1,15 +1,18 @@
-"""Getting a judged title onto disk, ready for Jellyfin.
+"""Getting a resolved title onto disk: sources, matching, verification.
 
-Spike. Sources are adapters behind one small protocol so that the decision of
-*where* a title comes from stays an explicit configuration choice rather than
-something inherited from whichever library was convenient (README, Part two).
-This package is a capability: it takes a resolved ``Target`` and never looks
-titles up itself, so it imports nothing local but ``config`` and ``errors``.
+A capability, not the agent. It takes a ``Target`` that someone else resolved,
+searches the configured sources, and downloads and verifies what it is told
+to; it never looks titles up, never decides on the user's behalf and never
+writes to the library or the store. That is ``agent``'s work. It imports
+nothing local but ``config`` and ``errors``.
 """
 
 from __future__ import annotations
 
-from .core import Acquired, acquire
+from .core import Fetched, Plan, execute, plan
 from .match import Candidate, Target
+from .sources import KNOWN, Source, open_sources
 
-__all__ = ["Acquired", "Candidate", "Target", "acquire"]
+__all__ = [
+    "KNOWN", "Candidate", "Fetched", "Plan", "Source", "Target", "execute", "open_sources", "plan",
+]

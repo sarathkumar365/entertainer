@@ -1,148 +1,126 @@
-"""Search every source, try the best match, keep it only if it verifies.
+"""Search every source, then try the best matches one at a time until one verifies.
 
-The order is deliberate: rank everything first, then download one at a time
-from the top, and verify each download before it reaches the library. A file
-whose duration disagrees with the film's runtime is deleted and the next
-candidate is tried — the name said it was the film, the file says otherwise,
-and the file wins.
+Two steps, not one, because a person may need to step in between them. ``plan``
+searches and ranks and touches nothing on disk; ``execute`` downloads the
+candidates it is given, in order, and verifies each before handing it back.
+Whatever sits between the two — the decision rule, a pause for the user, a
+"wrong file, try the next" — belongs to the agent, not to this package.
+
+A file whose duration disagrees with the film's runtime is deleted and the next
+candidate is tried: the name said it was the film, the file says otherwise, and
+the file wins.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import shutil
-import subprocess
 from collections.abc import Callable
-from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-import httpx
-
-from ..config import PATHS
 from ..errors import NotAcquired
-from .match import Candidate, Target, score
+from .match import VIDEO_EXTS, Candidate, Target, score
+from .sources import Progress, Source
+from .verify import verify
 
 GB = 1 << 30
 
-
-def library_dir() -> Path:
-    raw = os.environ.get("ENTERTAINER_LIBRARY_DIR")
-    return Path(raw).expanduser() if raw else PATHS.root / "library" / "Movies"
+Log = Callable[[str], None]
 
 
 @dataclass
-class Acquired:
+class Plan:
+    target: Target
+    candidates: list[Candidate]  # every file seen, scored, best first; refused ones score 0
+    errors: dict[str, str] = field(default_factory=dict)  # source name -> why it failed
+
+    @property
+    def usable(self) -> list[Candidate]:
+        return [c for c in self.candidates if c.score > 0]
+
+
+@dataclass
+class Fetched:
+    """A verified download, still in staging."""
+
     path: Path
     candidate: Candidate
     duration_min: float | None
 
 
-async def rank(target: Target, sources: list) -> list[Candidate]:
+async def plan(target: Target, sources: dict[str, Source], log: Log = print) -> Plan:
     found: list[Candidate] = []
-    async with AsyncExitStack() as stack:
-        for src in sources:
-            s = await stack.enter_async_context(src)
-            found.extend(score(target, c) for c in await s.search(target))
-    return sorted(found, key=lambda c: -c.score)
+    errors: dict[str, str] = {}
+    for name, src in sources.items():
+        try:
+            hits = await src.search(target)
+        except Exception as e:  # noqa: BLE001 — one source down must not sink the others
+            errors[name] = f"{type(e).__name__}: {e}"
+            log(f"[{name}] search failed: {errors[name]}")
+            continue
+        for c in hits:
+            c.source = name
+            found.append(score(target, c))
+    found.sort(key=lambda c: -c.score)
+    p = Plan(target, found, errors)
+    log(f"{len(found)} files seen, {len(p.usable)} match {target.folder}")
+    return p
 
 
-async def acquire(
+async def execute(
     target: Target,
-    sources: list,
-    library: Path | None = None,
+    candidates: list[Candidate],
+    sources: dict[str, Source],
+    staging: Path,
     *,
-    reserve_gb: float = 5.0,
+    reserve_gb: float,
     max_tries: int = 3,
-    max_gb: float | None = None,
-    progress: Callable[[int, int], None] | None = None,
-    log: Callable[[str], None] = print,
-) -> Acquired:
-    library = library or library_dir()
-    staging = library.parent / ".staging"
+    progress: Progress | None = None,
+    log: Log = print,
+) -> Fetched:
+    if not candidates:
+        raise NotAcquired(f"No candidate to try for {target.folder}.")
     staging.mkdir(parents=True, exist_ok=True)
-
-    async with AsyncExitStack() as stack:
-        live = [await stack.enter_async_context(s) for s in sources]
-        found: list[tuple[Candidate, object]] = []
-        for s in live:
-            for c in await s.search(target):
-                found.append((score(target, c), s))
-        found.sort(key=lambda p: -p[0].score)
-        usable = [(c, s) for c, s in found if c.score > 0
-                  and not (max_gb and c.size and c.size > max_gb * GB)]
-        log(f"{len(found)} files seen, {len(usable)} match {target.folder}")
-        if not usable:
-            refused = "; ".join(sorted({c.why for c, _ in found})[:5]) or "nothing found"
-            raise NotAcquired(f"No source had {target.folder}. Refused: {refused}")
-
-        for cand, src in usable[:max_tries]:
-            _check_disk(staging, cand.size, reserve_gb)
-            part = staging / f"{target.folder}.{cand.ext or 'mkv'}.part"
-            log(f"trying [{cand.source}] {cand.label} ({_gb(cand.size)}, score {cand.score:.1f})")
-            try:
-                await src.fetch(cand, part, progress)
-            except Exception as e:  # noqa: BLE001 — any source failure means try the next
-                log(f"  download failed: {e}")
-                part.unlink(missing_ok=True)
-                continue
-            ok, dur, why = verify(part, target.runtime_min)
-            if not ok:
-                log(f"  rejected after download: {why}")
-                part.unlink(missing_ok=True)
-                continue
-            final = library / target.folder / f"{target.folder}.{cand.ext or 'mkv'}"
-            final.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(part, final)
-            _refresh_jellyfin(log)
-            return Acquired(final, cand, dur)
+    tried, no_room = 0, []
+    for cand in candidates:
+        if tried >= max_tries:
+            break
+        if not _fits(staging, cand.size, reserve_gb):
+            # A smaller copy further down may still fit; skipping costs nothing.
+            no_room.append(cand)
+            log(f"skipping [{cand.source}] {cand.label}: {_gb(cand.size)} does not fit")
+            continue
+        tried += 1
+        part = staging / f"{target.folder}.part"
+        log(f"trying [{cand.source}] {cand.label} ({_gb(cand.size)}, score {cand.score:.1f})")
+        try:
+            await sources[cand.source].fetch(cand, part, progress)
+        except Exception as e:  # noqa: BLE001 — any source failure means try the next
+            log(f"  download failed: {e}")
+            part.unlink(missing_ok=True)
+            continue
+        if cand.ext and cand.ext not in VIDEO_EXTS:
+            log(f"  rejected after download: .{cand.ext} is not a video")
+            part.unlink(missing_ok=True)
+            continue
+        ok, dur, why = verify(part, target.runtime_min)
+        if not ok:
+            log(f"  rejected after download: {why}")
+            part.unlink(missing_ok=True)
+            continue
+        return Fetched(part, cand, dur)
+    if no_room and not tried:
+        free = shutil.disk_usage(staging).free
+        raise NotAcquired(
+            f"Not enough disk for {target.folder}: the smallest copy is "
+            f"{_gb(min(c.size or 0 for c in no_room))}, {_gb(free)} free, {reserve_gb:g} GB kept "
+            "in reserve. Free space or lower ENTERTAINER_ACQUIRE_RESERVE_GB."
+        )
     raise NotAcquired(f"Every candidate for {target.folder} failed to download or verify.")
 
 
-def verify(path: Path, runtime_min: int | None) -> tuple[bool, float | None, str]:
-    """Playable, and about as long as the film is supposed to be."""
-    try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type",
-             "-of", "json", str(path)],
-            capture_output=True, text=True, timeout=60, check=True,
-        ).stdout
-    except (subprocess.SubprocessError, FileNotFoundError) as e:
-        return False, None, f"ffprobe could not read it ({e})"
-    info = json.loads(out)
-    if not any(s.get("codec_type") == "video" for s in info.get("streams", [])):
-        return False, None, "no video stream"
-    dur = float(info.get("format", {}).get("duration") or 0) / 60
-    if runtime_min:
-        # Generous on purpose: cuts, frame rates and silent-era projection
-        # speeds all move runtime. This catches samples and wrong films, not
-        # director's cuts.
-        tol = max(8.0, 0.2 * runtime_min)
-        if abs(dur - runtime_min) > tol:
-            return False, dur, f"{dur:.0f} min, expected about {runtime_min}"
-    return True, dur, "ok"
-
-
-def _check_disk(where: Path, size: int | None, reserve_gb: float) -> None:
-    free = shutil.disk_usage(where).free
-    if size and free - size < reserve_gb * GB:
-        raise NotAcquired(
-            f"Not enough disk: {_gb(size)} needed, {_gb(free)} free, {reserve_gb:g} GB kept in "
-            "reserve. Free space or lower the reserve."
-        )
-
-
-def _refresh_jellyfin(log: Callable[[str], None]) -> None:
-    url, key = os.environ.get("JELLYFIN_URL"), os.environ.get("JELLYFIN_API_KEY")
-    if not (url and key):
-        return
-    try:
-        httpx.post(f"{url.rstrip('/')}/Library/Refresh",
-                   headers={"X-Emby-Token": key}, timeout=10).raise_for_status()
-        log("Jellyfin library refresh requested")
-    except httpx.HTTPError as e:
-        log(f"Jellyfin refresh failed ({e}); the file is in place and a scan will find it")
+def _fits(where: Path, size: int | None, reserve_gb: float) -> bool:
+    return not size or shutil.disk_usage(where).free - size >= reserve_gb * GB
 
 
 def _gb(n: int | None) -> str:

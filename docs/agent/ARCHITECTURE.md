@@ -144,3 +144,13 @@ watch-state verdicts from Jellyfin, and any language model.
 | DuckDB written from two places | Lock errors | Worker cursor on the app's connection |
 | Filing copies across filesystems | A multi-minute pause after verify | Staging inside the library directory |
 | A bot changes its layout | Not-found rate jumps in the job log | Watch the rate; the parser is the one place a model might later earn its keep |
+
+## State
+
+**Phase 1 done 30 Sep 2026.** `ent acquire get --imdb tt0013442 --sources archive` searched,
+downloaded, verified (93 min against TMDB's 94) and filed *Nosferatu (1922)* into a scratch
+library, with staging inside it. Found on the way: the catalogue resolver drops a typed year
+it cannot match and returns a same-named film from another decade as confident, so
+`ent acquire get` refuses a match whose year contradicts the typed one; and film extras
+("Behind the Scenes") scored as the film, so the matcher now refuses them. The Telegram
+sources were not run live in this phase.

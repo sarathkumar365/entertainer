@@ -447,6 +447,29 @@ def detail(tmdb_id: int, kind: str) -> dict | None:
     return asyncio.run(_detail_async(tmdb_id, kind))
 
 
+def find_movie(imdb_id: str) -> dict | None:
+    """The TMDB film record for an IMDb id, runtime included; None if TMDB has no film for it.
+
+    By id, never by title: a title search for *Vikram* returns 1986 or 2022
+    depending on popularity, and the agent then fetches the wrong film.
+    """
+    return asyncio.run(_find_movie_async(imdb_id))
+
+
+async def _find_movie_async(imdb_id: str) -> dict | None:
+    headers, params = _auth()
+    limiter = RateLimiter(per_second=10)
+    async with httpx.AsyncClient(headers=headers) as client:
+        found = await _get(
+            client, f"{TMDB_API_BASE}/find/{imdb_id}",
+            {**params, "external_source": "imdb_id"}, limiter,
+        )
+        hits = (found or {}).get("movie_results") or []
+        if not hits:
+            return None
+        return await _get(client, f"{TMDB_API_BASE}/movie/{hits[0]['id']}", params, limiter)
+
+
 def detail_to_row(payload: dict, kind: str) -> dict:
     """Flatten a TMDB detail response into catalogue columns.
 
