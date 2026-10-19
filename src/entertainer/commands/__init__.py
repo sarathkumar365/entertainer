@@ -10,6 +10,7 @@ The order here is the order `ent --help` lists the commands in.
 from __future__ import annotations
 
 from . import (
+    acquire,  # noqa: F401
     browse,  # noqa: F401
     build,  # noqa: F401
     diagnose,  # noqa: F401
@@ -18,6 +19,6 @@ from . import (
     transfer,  # noqa: F401
     verdicts,  # noqa: F401
 )
-from ._apps import app, bundle_app, data_app, release_app
+from ._apps import acquire_app, app, bundle_app, data_app, release_app
 
-__all__ = ["app", "bundle_app", "data_app", "release_app"]
+__all__ = ["acquire_app", "app", "bundle_app", "data_app", "release_app"]

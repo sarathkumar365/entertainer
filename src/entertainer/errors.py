@@ -67,3 +67,28 @@ class MissingCredentials(EntertainerError):
 
 class MissingDependency(EntertainerError):
     """An optional extra this step needs was never installed."""
+
+
+class CannotAcquire(EntertainerError):
+    """This machine is not set up to acquire, or acquisition is switched off.
+
+    A state of configuration, not a failure: the agent runs only where the
+    library and the Telegram session both are, and the message names what is
+    missing here.
+    """
+
+
+class AcquireBusy(EntertainerError):
+    """Another process holds the Telegram session.
+
+    Two clients on one session file collide on its SQLite database at best,
+    and get the session revoked by Telegram at worst, so the second waits.
+    """
+
+
+class NotAcquired(EntertainerError):
+    """No source produced a file that matched and verified.
+
+    Distinct from a failure: declining a doubtful file is the agent working.
+    A wrong film in the library costs trust; a missing one costs nothing.
+    """

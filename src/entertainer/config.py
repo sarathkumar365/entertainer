@@ -120,6 +120,73 @@ def has_tmdb() -> bool:
     return bool(key or bearer)
 
 
+# --- The agent --------------------------------------------------------------
+
+
+def _csv(name: str, default: str = "") -> tuple[str, ...]:
+    return tuple(p.strip() for p in os.environ.get(name, default).split(",") if p.strip())
+
+
+@dataclass(frozen=True)
+class AcquireSettings:
+    """Everything machine-specific the agent needs, read from the environment.
+
+    The agent runs wherever the app runs, so nothing here has a default that
+    happens to be right on one host. ``library_dir`` in particular has none:
+    a machine without it configured cannot acquire, and says so, rather than
+    filling a directory Jellyfin never looks at.
+    """
+
+    enabled: bool
+    library_dir: Path | None
+    max_gb: float
+    reserve_gb: float
+    sources: tuple[str, ...]
+    tg_api_id: str | None
+    tg_api_hash: str | None
+    tg_channels: tuple[str, ...]
+    tg_groups: tuple[str, ...]
+    tg_session: Path
+    jellyfin_url: str | None
+    jellyfin_key: str | None
+
+    @property
+    def staging(self) -> Path | None:
+        # Inside the library, not beside it: on the server the library is a
+        # mount, and its parent may be another disk or not writable at all.
+        # Same filesystem also makes filing a rename rather than a 3 GB copy.
+        # Jellyfin ignores dot-directories, so partial files are never scanned.
+        return self.library_dir / ".staging" if self.library_dir else None
+
+    @property
+    def tg_lock(self) -> Path:
+        return self.tg_session.with_suffix(".lock")
+
+
+def acquire_settings() -> AcquireSettings:
+    """Read on every call, like ``Paths.root``, so tests and ``.env`` edits apply."""
+    library = os.environ.get("ENTERTAINER_LIBRARY_DIR")
+    session = os.environ.get("ENTERTAINER_TG_SESSION")
+    channels = _csv("ENTERTAINER_TG_CHANNELS")
+    return AcquireSettings(
+        enabled=os.environ.get("ENTERTAINER_ACQUIRE", "on").strip().lower() != "off",
+        library_dir=Path(library).expanduser() if library else None,
+        max_gb=float(os.environ.get("ENTERTAINER_ACQUIRE_MAX_GB") or 3.0),
+        reserve_gb=float(os.environ.get("ENTERTAINER_ACQUIRE_RESERVE_GB") or 5.0),
+        sources=_csv("ENTERTAINER_ACQUIRE_SOURCES", "telegram-bot,telegram,archive"),
+        tg_api_id=os.environ.get("TELEGRAM_API_ID") or None,
+        tg_api_hash=os.environ.get("TELEGRAM_API_HASH") or None,
+        tg_channels=channels,
+        # Request groups are posted in; channels are only searched. The spike
+        # used one list for both, so an unset groups list falls back to it.
+        tg_groups=_csv("ENTERTAINER_TG_GROUPS") or channels,
+        tg_session=(Path(session).expanduser() if session
+                    else PATHS.root / "telegram" / "acquire.session"),
+        jellyfin_url=os.environ.get("JELLYFIN_URL") or None,
+        jellyfin_key=os.environ.get("JELLYFIN_API_KEY") or None,
+    )
+
+
 # --- Catalogue scope --------------------------------------------------------
 
 # Title types worth recommending. IMDb carries a long tail of episodes, shorts

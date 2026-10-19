@@ -34,7 +34,7 @@ good recommendations out of very few ratings. Item 14 is what the whole thing is
 | 11 | Feed it properly — volume, real dislikes, and rating where it counts | **Screens done** 25 Sep; the rating itself is yours |
 | 12 | ~~Cut the population prior~~ — the Bayesian-vs-ridge call stays open | **Prior removed** 25 Sep; ridge call blocked on item 11 |
 | 13 | Work from very few ratings — **craft as its own signal** | Scoped 25 Sep; reviews ruled out, crew measured available |
-| 14 | The agent — new releases, judged, acquired, ready to watch | Part two of the README; nothing built |
+| 14 | The agent — new releases, judged, acquired, ready to watch | Acquisition spiked, manual piece designed 29 Sep |
 
 Reference, not work: [Working — do not touch](#working--do-not-touch) at the end.
 
@@ -846,11 +846,36 @@ no idea", and a point estimate cannot.
   This is the only ratings source that costs the user nothing, which makes it directly relevant
   to item 13's constraint.
 
+### The first piece: the manual trigger — designed 29 Sep 2026
+
+The source is settled: Telegram request groups, proven by the spike on 29 Sep 2026
+(`docs/agent/ACQUISITION.md`). The first piece is manual — the user asks for a title and the
+agent gets it into Jellyfin — because the engine is not yet good enough to act unsupervised
+(item 10). The design, phase by phase, is in `docs/agent/DESIGN.md`; the structure and the
+implementation phases are in `docs/agent/ARCHITECTURE.md`:
+
+1. **Contracts.** Settings through `config`, a `Source` Protocol, `Target` from the IMDb id,
+   `acquire()` split into `plan()` and `execute()`, the four spike review findings fixed,
+   `ent acquire login|get`, and a lock file so one process holds the Telegram session.
+2. **The decision rule.** Auto-pick at a score of 13 or more when the leading candidates agree;
+   otherwise pause with the top three. Over-cap copies pause rather than download.
+3. **Jobs and worker.** A JSONL record per job under `data/acquire/jobs/`; one worker thread in
+   the app process; restart cleanup; a `request` verdict that drops the title from
+   recommendations.
+4. **The web front end.** "Get it" on any judged title and a Downloads page with progress, the
+   action log, the pause choice, "wrong file" and Cancel.
+5. **The join log and cleanup.** Every join recorded with the job that caused it; "leave joined
+   channels" undoes them.
+6. **Evals.** An offline replay over the user's twenty seed films, gating matcher changes on the
+   wrong-pick count.
+7. **Jellyfin on the home server.** The library refresh, proven against the real server.
+
+North star: wrong-file rate under 5% after twenty jobs.
+
 ### Open questions
 
-- **Where titles are acquired from is not settled**, and it is the one decision that must be
-  made explicitly rather than inherited from whatever library is convenient. Whatever the agent
-  does must respect what the user is licensed to hold.
+- ~~**Where titles are acquired from is not settled**~~ — Telegram, decided by the user and
+  proven 29 Sep 2026.
 - **Disk budget and an eviction rule.** An unsupervised agent with neither fills the disk.
 - **Sharing.** `events` has no user column, so one install is one person's taste. Several people
   on one Jellyfin server is a schema change. Noted in item 9 as well.
