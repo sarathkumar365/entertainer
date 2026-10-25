@@ -63,9 +63,9 @@ CREATE TABLE IF NOT EXISTS events (
     event_id   BIGINT PRIMARY KEY,
     ts         TIMESTAMP,
     item_id    INTEGER,
-    kind       VARCHAR,   -- rate | skip | seen | unseen | watchlist | dismiss
+    kind       VARCHAR,   -- rate | skip | seen | unseen | watchlist | dismiss | request
     value      DOUBLE,    -- rating on 0..10 for 'rate', else NULL
-    source     VARCHAR,   -- elicit | rec | manual | import
+    source     VARCHAR,   -- elicit | rec | manual | import | agent
     context    VARCHAR    -- JSON blob: slate position, policy version, ...
 );
 
@@ -342,7 +342,9 @@ def negatives(con: duckdb.DuckDBPyConnection) -> list[tuple[int, float]]:
 # recommending something — it is the single best reason to keep it in play.
 # So `unseen` is recorded (to avoid asking twice) but deliberately excluded
 # from the set below.
-CONSUMED_KINDS = ("rate", "skip", "seen", "dismiss")
+# `request` is the agent's: the user asked for the film to be fetched, which says
+# more than "seen" about wanting it and is no less a reason to stop offering it.
+CONSUMED_KINDS = ("rate", "skip", "seen", "dismiss", "request")
 
 
 def active_watchlist(con: duckdb.DuckDBPyConnection) -> set[int]:

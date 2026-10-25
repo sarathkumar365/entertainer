@@ -70,6 +70,10 @@ export default function Home() {
   const [answer, setAnswer] = useState(null);
   const [failure, setFailure] = useState(null);
   const [searching, setSearching] = useState(false);
+  // The match the answer is about: it carries the TMDB id that "Get it" needs
+  // for a title outside the catalogue, which the judged item does not.
+  const [judgedMatch, setJudgedMatch] = useState(null);
+  const [getting, setGetting] = useState(null);
   const inputRef = useRef(null);
   // Bumped whenever the question changes, so a late answer to an abandoned
   // one is dropped instead of landing on the wrong screen.
@@ -128,8 +132,20 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKey);
   }, [phase]);
 
+  async function getIt() {
+    setGetting({ state: "sending" });
+    try {
+      const job = await api.getIt({ ...judgeBody(judgedMatch), title: answer.item.title });
+      setGetting({ state: "queued", job });
+    } catch (e) {
+      setGetting({ state: "failed", message: e.message });
+    }
+  }
+
   async function judge(match) {
     const ticket = ++asking.current;
+    setJudgedMatch(match);
+    setGetting(null);
     setChoices([]);
     setPhase("thinking");
     setAnswer({ item: match });
@@ -345,6 +361,20 @@ export default function Home() {
               </p>
               {answer.source === "text" ? (
                 <p className="home-line home-note">new to it — judged on its description and TMDB rating</p>
+              ) : null}
+              {item.kind === "movie" ? (
+                <div className="home-get">
+                  {getting?.state === "queued" ? (
+                    <p className="home-line">
+                      asked for — <Link to="/downloads">follow it in Downloads</Link>
+                    </p>
+                  ) : (
+                    <button type="button" className="cta cta-quiet" disabled={getting?.state === "sending"} onClick={getIt}>
+                      {getting?.state === "sending" ? "Asking…" : "Get it"}
+                    </button>
+                  )}
+                  {getting?.state === "failed" ? <p className="home-line home-note">{getting.message}</p> : null}
+                </div>
               ) : null}
             </div>
           ) : null}

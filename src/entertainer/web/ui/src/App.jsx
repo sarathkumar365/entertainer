@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import Boundary from "./components/Boundary";
+import Downloads from "./pages/Downloads";
 import Evidence from "./pages/Evidence";
 import Home from "./pages/Home";
 import Library from "./pages/Library";
@@ -14,6 +15,7 @@ const TABS = [
   ["/library", "Library"],
   ["/taste", "Taste"],
   ["/evidence", "Evidence"],
+  ["/downloads", "Downloads"],
 ];
 
 export default function App() {
@@ -37,6 +39,7 @@ export default function App() {
             <Route path="/library" element={<Library />} />
             <Route path="/taste" element={<Taste />} />
             <Route path="/evidence" element={<Evidence />} />
+            <Route path="/downloads" element={<Downloads />} />
             <Route path="*" element={<Home />} />
           </Routes>
         </Boundary>

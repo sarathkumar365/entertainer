@@ -859,16 +859,16 @@ implementation phases are in `docs/agent/ARCHITECTURE.md`:
    `ent acquire login|get`, and a lock file so one process holds the Telegram session.
 2. **The decision rule** — done 25 Oct 2026. Auto-pick at a score of 13 or more when the leading candidates agree;
    otherwise pause with the top three. Over-cap copies pause rather than download.
-3. **Jobs and worker.** A JSONL record per job under `data/acquire/jobs/`; one worker thread in
+3. **Jobs and worker** — done 25 Oct 2026. A JSONL record per job under `data/acquire/jobs/`; one worker thread in
    the app process; restart cleanup; a `request` verdict that drops the title from
    recommendations.
-4. **The web front end.** "Get it" on any judged title and a Downloads page with progress, the
+4. **The web front end** — done 25 Oct 2026. "Get it" on any judged title and a Downloads page with progress, the
    action log, the pause choice, "wrong file" and Cancel.
-5. **The join log and cleanup.** Every join recorded with the job that caused it; "leave joined
+5. **The join log and cleanup** — done 25 Oct 2026. Every join recorded with the job that caused it; "leave joined
    channels" undoes them.
-6. **Evals.** An offline replay over the user's twenty seed films, gating matcher changes on the
+6. **Evals** — the replay is built (25 Oct 2026); the seed films are the user's. An offline replay over the user's twenty seed films, gating matcher changes on the
    wrong-pick count.
-7. **Jellyfin on the home server.** The library refresh, proven against the real server.
+7. **Jellyfin on the home server** — the check and refresh are built; not yet run against the server. The library refresh, proven against the real server.
 
 North star: wrong-file rate under 5% after twenty jobs.
 

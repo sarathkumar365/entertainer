@@ -93,3 +93,4 @@ general principle.
 - guessit does not know "Tamil": with no year in a label, "Vikram TAMIL 1080p" parsed as the title "Vikram TAMIL" and the right film was refused. Language names are stripped from the parsed title.
 - The decision rule's table assumed a label missing its year or language would score under 13. Each costs three points and a 1080p HEVC copy has four to spare, so neither row ever fired. Check the arithmetic of a threshold against the scorer before trusting it to carry a rule.
 - A bot button often names no size, and an unknown size passed both the cap and the disk reserve. The download now aborts on the bytes the source reports.
+- Jobs were first created `queued` and then claimed by the process that made them. A demo app running alongside picked up a terminal dry run in the gap and ran it as a real job. A job now starts as its creator's in the same write, and running one takes a per-job lock.

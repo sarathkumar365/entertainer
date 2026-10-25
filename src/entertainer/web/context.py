@@ -13,12 +13,16 @@ they survive a module reload, and each app carries its own context.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from fastapi import Request
 
 from .. import store
 from ..engine import Engine
 from ..errors import CatalogueBusy
+
+if TYPE_CHECKING:
+    from ..agent.worker import Worker
 
 # Below this many titles, assume the catalogue was never built rather than
 # built small.
@@ -54,6 +58,9 @@ class AppContext:
     engine: Engine
     use_live: bool
     token: str | None = None
+    # Built with the app, started by its lifespan: a TestClient used without
+    # ``with`` never starts the thread, and the tests drive jobs directly.
+    worker: Worker | None = None
 
 
 def get_context(request: Request) -> AppContext:

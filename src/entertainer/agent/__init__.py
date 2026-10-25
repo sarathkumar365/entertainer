@@ -2,8 +2,9 @@
 
 The work layer over ``acquire``. It resolves what the user asked for into a
 ``Target`` by IMDb id, checks this machine can acquire at all, runs the search
-and the download, files the result into the library and tells Jellyfin. Jobs and
-the worker thread arrive here in later phases
+and the download, files the result into the library and tells Jellyfin. ``jobs`` records each
+request, ``worker`` runs them one at a time inside the app, and ``replay``
+measures the matcher against what the user said was right
 (``docs/agent/ARCHITECTURE.md``).
 """
 

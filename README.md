@@ -280,6 +280,15 @@ ready to watch*.
 - **Disk.** An agent that acts unsupervised needs a budget and an eviction
   rule, or it fills the disk with films you never got round to.
 
+### What exists today
+
+The manual piece: ask for a film ("Get it" after "Will I like it?" on Home, or
+`ent acquire get`), and the agent finds a copy, decides whether the labels are
+clear enough to pick one or asks you, downloads it, checks its length against
+the film's runtime, and files it where Jellyfin looks. The Downloads page shows
+every job and the wrong-file rate it is judged by. Nothing is fetched without
+being asked for. The design and its state are in `docs/agent/`.
+
 ---
 
 ## Does it work?

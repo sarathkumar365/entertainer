@@ -367,3 +367,33 @@ kbd {
 .save:disabled { opacity: .4; cursor: default; }
 
 .recs-kind { margin-top: 12px; display: inline-flex; }
+
+/* Downloads */
+.dl-measures { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px; margin: 0 0 30px; }
+.dl-measures > div { display: grid; gap: 4px; }
+.dl-figure { font-size: 28px; letter-spacing: -0.02em; }
+.dl-problem { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; color: var(--fg-2); font-size: 13px; margin: 0 0 24px; }
+.dl-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dl-job { border: 1px solid var(--line-2); border-radius: 6px; padding: 10px 12px; }
+.dl-paused { border-color: var(--line); }
+.dl-row { display: flex; align-items: center; gap: 12px; }
+.dl-name { flex: 1; min-width: 0; display: grid; gap: 3px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; }
+.dl-state { min-width: 84px; text-align: right; }
+.dl-filed .dl-state { color: var(--fg); }
+.dl-reason { margin: 6px 0 0; overflow-wrap: anywhere; }
+.dl-error { margin: 6px 0 0; color: var(--fg); }
+.dl-progress { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.dl-bar { flex: 1; height: 3px; background: var(--line-2); border-radius: 2px; overflow: hidden; }
+.dl-bar > div { height: 100%; background: var(--fg); transition: width 0.6s var(--spring); }
+.dl-detail { margin-top: 10px; display: grid; gap: 8px; }
+.dl-offer { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.dl-offer li { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line-2); padding-top: 6px; }
+.dl-offer li > div { min-width: 0; overflow-wrap: anywhere; }
+.dl-log { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; max-height: 220px; overflow: auto; }
+.home-get { margin-top: 10px; }
+.dl-jellyfin { margin: -14px 0 26px; }
+@media (max-width: 560px) {
+  .dl-row { flex-wrap: wrap; }
+  .dl-state { min-width: 0; text-align: left; }
+}
+
