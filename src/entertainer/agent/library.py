@@ -59,3 +59,23 @@ def refresh_jellyfin(settings: AcquireSettings, log: Callable[[str], None]) -> N
         log("Jellyfin library refresh requested")
     except httpx.HTTPError as e:
         log(f"Jellyfin refresh failed ({e}); the file is in place and a scan will find it")
+
+
+def check_jellyfin(settings: AcquireSettings) -> tuple[bool, str]:
+    """Whether the refresh after filing will reach Jellyfin, in words.
+
+    Not a precondition for acquiring: a film filed without a refresh is found by
+    Jellyfin's next scheduled scan. It is shown so a wrong URL or a revoked key
+    is noticed before twenty jobs have quietly skipped their refresh.
+    """
+    if not (settings.jellyfin_url and settings.jellyfin_key):
+        return False, "Jellyfin is not configured (JELLYFIN_URL, JELLYFIN_API_KEY); scans will find new films"
+    try:
+        r = httpx.get(f"{settings.jellyfin_url.rstrip('/')}/System/Info",
+                      headers={"X-Emby-Token": settings.jellyfin_key}, timeout=5)
+        r.raise_for_status()
+        info = r.json()
+    except httpx.HTTPError as e:
+        return False, f"Jellyfin at {settings.jellyfin_url} did not answer: {e}"
+    return True, f"Jellyfin {info.get('Version', '')} on {info.get('ServerName', settings.jellyfin_url)}"
+

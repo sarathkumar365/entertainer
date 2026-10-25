@@ -99,9 +99,28 @@ queued → searching → downloading → verifying → filed
 
 - One job at a time; the rest wait in `queued`.
 - 45 minutes per job, then `failed`.
-- On app start, any job not in a terminal state is marked `failed` and its `.part` deleted.
-  No resume.
+- On app start, any job left `searching` or `downloading` by a process that is gone is marked
+  `failed` and its `.part` deleted. No resume.
 - `ENTERTAINER_ACQUIRE=off` refuses new jobs and leaves existing records readable.
+
+Settled while building phase 3 (25 Oct 2026):
+
+- **A pause does not hold the worker.** The job records its offer and ends; a choice puts it
+  back in `queued`, and the rerun searches again and finds the chosen copy by source and
+  label. Holding the connection for up to a day would block every other request behind one
+  question, and a bot's buttons do not outlive the search that showed them anyway. So
+  `queued` and `paused` jobs survive a restart; only a job caught mid-run fails.
+- **The CLI writes jobs too.** `ent acquire get` creates a job already marked as its own, in
+  the same write, so the app's worker never takes it; a dry run is a job in state `searched`,
+  which is how the seed set gets recorded. Running a queued job takes a per-job `flock`, so
+  the app and `ent acquire run` never run the same one. The first version created every job
+  `queued` and the demo app's worker ran a dry run from the terminal; see `LEARNINGS.md`.
+- **No shared DuckDB cursor.** The app opens a connection per request rather than holding
+  one, so the worker does the same for its one write, the `request` event.
+- **The `request` verdict needs a catalogue title.** A film from outside the catalogue has no
+  item to attach it to; its job file still records the request.
+- **Each job runs on a fresh loop** (`asyncio.run` in the worker thread), which keeps the
+  Telethon client on the loop that made it with no loop to manage.
 
 ## The engine
 
@@ -162,3 +181,30 @@ two open review items from phase 1 are closed: a copy of unknown size is stopped
 once it outgrows the cap or the disk reserve, and the year guard has a test. Writing the
 table's tests found that a missing year or language never pushed a score under 13, and that
 the matcher refused labels like "Vikram TAMIL 1080p"; both are fixed (see `LEARNINGS.md`).
+
+**Phases 3–6 done, phase 7 code-complete, 25 Oct 2026.**
+
+- *Jobs and worker* (`agent/jobs.py`, `agent/worker.py`): the state machine, JSONL records,
+  one worker thread started by the app's lifespan, restart recovery, the 45-minute and 24-hour
+  budgets, cancel, "wrong file", and the `request` verdict. CLI: `ent acquire jobs`,
+  `choose`, `wrong`, `cancel`, `run`.
+- *Web* (`web/routers/downloads.py`, `pages/Downloads.jsx`): "Get it" on any judged film on
+  Home, and a Downloads page with progress, the log, the pause choice, "wrong file", Cancel,
+  and the north-star figures. Verified in the browser against archive.org on a scratch
+  library: "wrong file" on a filed copy requeued the job, which searched again and paused on
+  a Hindi dub against an unlabelled copy; Cancel cancelled it; "leave joined channels"
+  without Telegram credentials showed the reason. "Take this" was not clicked, to avoid a
+  multi-gigabyte download; its path is covered by tests.
+- *Join log* (`acquire/telegram.py`): every join is recorded with the job that caused it, with
+  the chat id; "leave joined channels" (web and `ent acquire leave`) leaves only those.
+  Already-joined channels are not recorded, so the cleanup never leaves one the user joined.
+- *Replay* (`agent/replay.py`, `ent acquire replay`, `ent acquire confirm`): re-scores every
+  recorded candidate list with the current matcher and rule, with no network, against the
+  user's labels; `--save` sets the baseline and a run with more wrong picks exits non-zero.
+- *Jellyfin* (`ent acquire check`, and a line on the Downloads page): reports whether the
+  refresh will reach the server. **Not proven against the real server** — that needs the
+  home server's URL and key, and the twenty jobs that make the north star mean something.
+
+Still needs the user: a Telegram login on the machine that acquires, a fresh `api_hash`
+(phase 8 of `DESIGN.md`), the twenty seed films (phase 7 of `DESIGN.md`), and the Jellyfin
+URL and key.

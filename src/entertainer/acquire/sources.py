@@ -18,6 +18,8 @@ from ..errors import EntertainerError
 from .match import Candidate, Target
 
 Progress = Callable[[int, int], None]
+# Told of every channel joined on a bot's demand: the link, and the chat it opened.
+OnJoin = Callable[[str, str], None]
 
 KNOWN = ("telegram-bot", "telegram", "archive")
 
@@ -38,7 +40,8 @@ class Source(Protocol):
 
 @asynccontextmanager
 async def open_sources(
-    settings: AcquireSettings, names: tuple[str, ...] | list[str] | None = None
+    settings: AcquireSettings, names: tuple[str, ...] | list[str] | None = None,
+    on_join: OnJoin | None = None,
 ) -> AsyncIterator[dict[str, Source]]:
     names = list(names or settings.sources)
     unknown = [n for n in names if n not in KNOWN]
@@ -54,11 +57,11 @@ async def open_sources(
             tg = await stack.enter_async_context(connect(settings))
         live: dict[str, Source] = {}
         for n in names:
-            live[n] = await stack.enter_async_context(_make(n, settings, tg))
+            live[n] = await stack.enter_async_context(_make(n, settings, tg, on_join))
         yield live
 
 
-def _make(name: str, settings: AcquireSettings, tg) -> Source:
+def _make(name: str, settings: AcquireSettings, tg, on_join: OnJoin | None) -> Source:
     if name == "telegram":
         from .telegram import TelegramSource
 
@@ -66,7 +69,7 @@ def _make(name: str, settings: AcquireSettings, tg) -> Source:
     if name == "telegram-bot":
         from .telegram import BotGroupSource
 
-        return BotGroupSource(tg, settings.tg_groups)
+        return BotGroupSource(tg, settings.tg_groups, on_join=on_join)
     from .archive import ArchiveSource
 
     return ArchiveSource()

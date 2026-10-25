@@ -59,6 +59,13 @@ export const api = {
   validationSummary: () => request("/api/validation/summary"),
   seal: (itemIds) => post("/api/validation/seal", { item_ids: itemIds }),
   reveal: (caseId, verdict) => post(`/api/validation/${caseId}/reveal`, { verdict }),
+  downloads: () => request("/api/downloads"),
+  download: (jobId) => request(`/api/downloads/${jobId}`),
+  getIt: (body) => post("/api/downloads", body),
+  chooseDownload: (jobId, index) => post(`/api/downloads/${jobId}/choose`, { index }),
+  wrongFile: (jobId) => post(`/api/downloads/${jobId}/wrong`),
+  cancelDownload: (jobId) => post(`/api/downloads/${jobId}/cancel`),
+  leaveJoined: () => post("/api/downloads/leave-joined"),
 };
 
 /** The seven the engine understands, in the order they read as a scale. */

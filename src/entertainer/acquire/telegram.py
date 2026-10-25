@@ -82,6 +82,24 @@ async def connect(settings: AcquireSettings) -> AsyncIterator:
                 f.chmod(0o600)
 
 
+async def leave(settings: AcquireSettings, chats: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Leave the channels the agent joined. Returns those left and why any were not.
+
+    Only ever called with chat ids from the join log, so a channel the user
+    joined themselves is never touched.
+    """
+    left: list[str] = []
+    failed: dict[str, str] = {}
+    async with connect(settings) as c:
+        for chat in chats:
+            try:
+                await c.delete_dialog(await c.get_entity(int(chat)))
+                left.append(chat)
+            except Exception as e:  # noqa: BLE001 — one stubborn channel must not keep the rest
+                failed[chat] = f"{type(e).__name__}: {e}"
+    return left, failed
+
+
 class TelegramSource:
     name = "telegram"
 
@@ -183,10 +201,12 @@ class BotGroupSource:
     _SIZE = {"KB": 1 << 10, "MB": 1 << 20, "GB": 1 << 30}
 
     def __init__(self, client, groups: tuple[str, ...] | list[str], pages: int = 2,
-                 wait: float = 30.0):
+                 wait: float = 30.0, on_join=None):
         self._client = client
         self.inner = TelegramSource(client, groups)
         self.pages, self.wait = pages, wait
+        # Every join is recorded against its job so "leave joined channels" can undo it.
+        self.on_join = on_join
 
     async def __aenter__(self):
         await self.inner.__aenter__()
@@ -307,12 +327,17 @@ class BotGroupSource:
         from telethon import errors, functions
 
         m = re.match(r"https?://t\.me/(?:\+|joinchat/)([\w-]+)", link)
+        chat = ""
         try:
             if m:
-                await self._client(functions.messages.ImportChatInviteRequest(m.group(1)))
+                res = await self._client(functions.messages.ImportChatInviteRequest(m.group(1)))
             else:
-                await self._client(functions.channels.JoinChannelRequest(link.rsplit("/", 1)[-1]))
-        except (errors.InviteRequestSentError, errors.UserAlreadyParticipantError):
+                res = await self._client(
+                    functions.channels.JoinChannelRequest(link.rsplit("/", 1)[-1]))
+            chat = _joined_chat(res)
+        except errors.UserAlreadyParticipantError:
+            return  # joined before, by the user or an earlier job; not ours to leave
+        except errors.InviteRequestSentError:
             pass  # a pending request is what these bots check for
         except errors.FloodWaitError as e:
             if e.seconds > 600:
@@ -321,6 +346,9 @@ class BotGroupSource:
 
             await asyncio.sleep(e.seconds + 1)
             await self._join(link)
+            return
+        if self.on_join:
+            self.on_join(link, chat)
 
     async def _last_id(self, bot: str) -> int:
         last = await self._client.get_messages(bot, limit=1)
@@ -339,6 +367,12 @@ class BotGroupSource:
 
 
 import re  # noqa: E402 — module-level helpers below
+
+
+def _joined_chat(res) -> str:
+    """The id of the channel a join opened, as ``leave`` needs it; empty if unknown."""
+    chats = getattr(res, "chats", None) or []
+    return str(chats[0].id) if chats else ""
 
 
 def _buttons(msg):

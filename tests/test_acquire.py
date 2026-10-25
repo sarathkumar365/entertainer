@@ -118,7 +118,7 @@ def _settings(tmp_path, **kw) -> AcquireSettings:
 
 def _get(settings, target, *srcs, choose=None):
     @asynccontextmanager
-    async def fake_open(_settings, _names=None):
+    async def fake_open(_settings, _names=None, on_join=None):
         yield {s.name: s for s in srcs}
 
     with pytest.MonkeyPatch.context() as mp:

@@ -17,6 +17,8 @@ The routes live in ``routers``; this module only assembles them.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -24,6 +26,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import store
+from ..agent.worker import Worker
 from ..engine import Engine
 from .context import EMPTY_CATALOGUE, AppContext, _catalogue_size
 from .failures import install as install_failure_handlers
@@ -50,7 +53,18 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
     tests construct several apps in one process with different tokens and
     live settings. A module-level engine would be shared between them.
     """
-    app = FastAPI(title="entertainer", docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # The download worker lives and dies with the app, so a job never
+        # outlives the process that would report on it.
+        worker = app.state.ctx.worker
+        worker.start()
+        try:
+            yield
+        finally:
+            worker.stop()
+
+    app = FastAPI(title="entertainer", docs_url=None, redoc_url=None, lifespan=lifespan)
 
     # Registered first so it covers every route added below. A half-built
     # machine is a normal state here — no fused space, or a build holding
@@ -73,6 +87,7 @@ def create_app(token: str | None = None, live: bool | None = None) -> FastAPI:
         engine=Engine(),
         use_live=live if live is not None else _catalogue_size() < EMPTY_CATALOGUE,
         token=token,
+        worker=Worker(),
     )
 
     if token:
