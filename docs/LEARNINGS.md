@@ -90,3 +90,6 @@ general principle.
 - A Telegram "movie channel" was a request group: no files in it, only filter bots that reply to a posted title and deliver by private message. Drive the bot; searching the group finds nothing. See `docs/agent/ACQUISITION.md`.
 - A filter bot sends the file and then a fresh join demand a second later. Reading its chat newest first joined channels forever and never saw the file. Read oldest first; a file wins.
 - File messages from those bots carry promotional channel buttons. Following every `t.me` link as a join demand joined ad channels on the user's account. Follow join links only on a file-less message that asks for a join.
+- guessit does not know "Tamil": with no year in a label, "Vikram TAMIL 1080p" parsed as the title "Vikram TAMIL" and the right film was refused. Language names are stripped from the parsed title.
+- The decision rule's table assumed a label missing its year or language would score under 13. Each costs three points and a 1080p HEVC copy has four to spare, so neither row ever fired. Check the arithmetic of a threshold against the scorer before trusting it to carry a rule.
+- A bot button often names no size, and an unknown size passed both the cap and the disk reserve. The download now aborts on the bytes the source reports.

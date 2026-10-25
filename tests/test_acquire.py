@@ -64,10 +64,12 @@ def test_non_video_posts_are_skipped():
 class FakeSource:
     name = "fake"
 
-    def __init__(self, labels, clip: Path, sizes=None, delivered_ext=None, fail=None):
+    def __init__(self, labels, clip: Path, sizes=None, delivered_ext=None, fail=None,
+                 reported=None):
         self.labels, self.clip, self.fetched = labels, clip, []
         self.sizes = sizes or [1000] * len(labels)
         self.delivered_ext, self.fail = delivered_ext, fail
+        self.reported = reported or {}  # label -> the total the source reports while fetching
 
     async def __aenter__(self):
         return self
@@ -86,6 +88,9 @@ class FakeSource:
         self.fetched.append(cand.label)
         if self.delivered_ext:
             cand.ext = self.delivered_ext
+        dest.write_bytes(b"x")  # the first chunk lands before the total is known
+        if progress and cand.label in self.reported:
+            progress(1, self.reported[cand.label])
         shutil.copy(self.clip, dest)
         return dest
 
@@ -111,14 +116,14 @@ def _settings(tmp_path, **kw) -> AcquireSettings:
     return AcquireSettings(**{**base, **kw})
 
 
-def _get(settings, target, *srcs):
+def _get(settings, target, *srcs, choose=None):
     @asynccontextmanager
     async def fake_open(_settings, _names=None):
         yield {s.name: s for s in srcs}
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(run, "open_sources", fake_open)
-        return asyncio.run(run.get(target, settings, log=lambda _: None))
+        return asyncio.run(run.get(target, settings, log=lambda _: None, choose=choose))
 
 
 SHORT = Target("Vikram", 2022, 1)
@@ -181,6 +186,51 @@ def test_every_copy_over_the_cap_is_refused_with_the_smallest_named(tmp_path, cl
     s = _settings(tmp_path, max_gb=1.0)
     with pytest.raises(NotAcquired, match="smallest is 2.00 GB"):
         _get(s, SHORT, FakeSource(["Vikram.2022.1080p.mp4"], clip, sizes=[2 << 30]))
+
+
+def test_a_copy_over_the_cap_is_taken_only_when_the_user_accepts_it(tmp_path, clip):
+    s = _settings(tmp_path, max_gb=1.0)
+    src = FakeSource(["Vikram.2022.1080p.mp4"], clip, sizes=[2 << 30])
+    offered = []
+    got = _get(s, SHORT, src, choose=lambda d: offered.append(d) or d.offer[0])
+    assert offered[0].over_cap and got.path.exists()
+
+
+def test_a_copy_of_unknown_size_is_stopped_once_it_outgrows_the_cap(tmp_path, clip):
+    """Bot buttons often name no size, which used to wave the copy past the cap."""
+    s = _settings(tmp_path, max_gb=1.0)
+    big, small = "Vikram.2022.1080p.mp4", "Vikram.2022.720p.mp4"
+    src = FakeSource([big, small], clip, sizes=[None, 1000], reported={big: 5 << 30})
+    got = _get(s, SHORT, src)
+    assert src.fetched == [big, small] and got.candidate.label == small
+    assert [p.name for p in s.staging.iterdir()] == []
+
+
+def test_a_copy_of_unknown_size_is_stopped_before_it_eats_the_reserve(tmp_path, clip):
+    free_gb = shutil.disk_usage(tmp_path).free / (1 << 30)
+    s = _settings(tmp_path, max_gb=1e6, reserve_gb=free_gb)  # nothing may be written
+    src = FakeSource(["Vikram.2022.1080p.mp4"], clip, sizes=[None])
+    with pytest.raises(NotAcquired):
+        _get(s, SHORT, src)
+    assert not any(s.library_dir.rglob("*.mp4"))
+
+
+@pytest.mark.parametrize("typed, found, refused", [
+    ("Vikram 2022", 1986, True),
+    ("Vikram 2022", 2022, False),
+    ("Vikram 2022", 2021, False),  # festival year against release year
+    ("Vikram", 1986, False),       # no year typed, nothing to contradict
+])
+def test_a_typed_year_the_match_contradicts_is_refused(typed, found, refused):
+    from entertainer.commands.acquire import _refuse_other_year
+    from entertainer.errors import EntertainerError
+
+    match = SimpleNamespace(year=found, label=lambda: f"Vikram ({found})")
+    if refused:
+        with pytest.raises(EntertainerError, match="--imdb"):
+            _refuse_other_year(typed, match)
+    else:
+        _refuse_other_year(typed, match)
 
 
 def test_a_film_already_in_the_library_is_not_fetched_again(tmp_path, clip):

@@ -152,6 +152,12 @@ Budgets per job:
 | Force-subscribe join rounds | 3 |
 | Candidates tried | 3 |
 
+Implemented 25 Oct 2026 in `agent/decide.py`, with two readings the table left open. A
+missing year or language is checked directly, not through the score: each costs only three
+points, so a 1080p HEVC copy missing either still scores 14 or more. "Leading candidates" are
+those within three points of the best, the swing a year or a language is worth; a dub further
+down is the matcher working, not a conflict, and pausing on it would pause on every Tamil film.
+
 The 3 GB cap will exclude some 1080p x264 copies of long films; HEVC copies of the same film
 usually fit, and the matcher already prefers HEVC slightly.
 

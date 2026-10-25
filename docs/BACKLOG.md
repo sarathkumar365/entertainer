@@ -854,10 +854,10 @@ agent gets it into Jellyfin — because the engine is not yet good enough to act
 (item 10). The design, phase by phase, is in `docs/agent/DESIGN.md`; the structure and the
 implementation phases are in `docs/agent/ARCHITECTURE.md`:
 
-1. **Contracts.** Settings through `config`, a `Source` Protocol, `Target` from the IMDb id,
+1. **Contracts** — done 18 Oct 2026. Settings through `config`, a `Source` Protocol, `Target` from the IMDb id,
    `acquire()` split into `plan()` and `execute()`, the four spike review findings fixed,
    `ent acquire login|get`, and a lock file so one process holds the Telegram session.
-2. **The decision rule.** Auto-pick at a score of 13 or more when the leading candidates agree;
+2. **The decision rule** — done 25 Oct 2026. Auto-pick at a score of 13 or more when the leading candidates agree;
    otherwise pause with the top three. Over-cap copies pause rather than download.
 3. **Jobs and worker.** A JSONL record per job under `data/acquire/jobs/`; one worker thread in
    the app process; restart cleanup; a `request` verdict that drops the title from

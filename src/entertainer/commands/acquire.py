@@ -13,6 +13,7 @@ import sys
 import typer
 
 from .. import agent, store
+from ..acquire import Candidate
 from ..acquire.core import GB
 from ..config import acquire_settings
 from ..errors import EntertainerError
@@ -67,11 +68,13 @@ def acquire_get(
         p = asyncio.run(agent.search(target, sources=names, log=_log))
         for c in p.candidates[:15]:
             mark = "[green]ok[/green]" if c.score > 0 else "[dim]no[/dim]"
-            size = f"{c.size / GB:5.2f} GB" if c.size else "    ? GB"
-            console.print(f"{mark} {c.score:5.1f} {size} [{c.source}] {c.label}  [dim]{c.why}[/dim]")
+            console.print(f"{mark} {c.score:5.1f} {_size(c)} [{c.source}] {c.label}  "
+                          f"[dim]{c.why}[/dim]")
+        d = agent.decide(p, acquire_settings().max_gb)
+        console.print(f"[bold]{'would pause' if d.paused else 'would take'}[/bold]: {d.reason}")
         return
 
-    got = asyncio.run(agent.get(target, sources=names, progress=_bar, log=_log))
+    got = asyncio.run(agent.get(target, sources=names, progress=_bar, log=_log, choose=_choose))
     print(file=sys.stderr)
     dur = f"{got.duration_min:.0f} min, " if got.duration_min else ""
     console.print(f"[green]filed[/green] {got.path}  ({dur}from {got.candidate.source})")
@@ -85,16 +88,34 @@ def _target_for(title: str | None):
         match = pick(con, title)
         if match is None:
             raise typer.Exit(code=1)
-        # The resolver drops a typed year when nothing matches it, and then
-        # confidently returns the film of the same name from another decade.
-        # Rating that is recoverable; downloading it is the wrong-target failure.
-        _, year = split_year(title)
-        if year and match.year and abs(match.year - year) > 1:
-            raise EntertainerError(
-                f"The catalogue has no {title!r}; the nearest is {match.label()}. "
-                "Use --imdb with the film's IMDb id."
-            )
+        _refuse_other_year(title, match)
         return agent.from_item(con, match.item_id)
+
+
+def _refuse_other_year(title: str, match) -> None:
+    # The resolver drops a typed year when nothing matches it, and then
+    # confidently returns the film of the same name from another decade.
+    # Rating that is recoverable; downloading it is the wrong-target failure.
+    _, year = split_year(title)
+    if year and match.year and abs(match.year - year) > 1:
+        raise EntertainerError(
+            f"The catalogue has no {title!r}; the nearest is {match.label()}. "
+            "Use --imdb with the film's IMDb id."
+        )
+
+
+def _choose(d: agent.Decision) -> Candidate | None:
+    console.print(f"[yellow]paused[/yellow]: {d.reason}.")
+    for i, c in enumerate(d.offer, 1):
+        console.print(f"  {i}. {c.score:5.1f} {_size(c)} [{c.source}] {c.label}")
+    if not sys.stdin.isatty():
+        return None
+    pick = typer.prompt(f"Take which (1-{len(d.offer)}, 0 to give up)", default="0")
+    return d.offer[int(pick) - 1] if pick.isdigit() and 1 <= int(pick) <= len(d.offer) else None
+
+
+def _size(c: Candidate) -> str:
+    return f"{c.size / GB:5.2f} GB" if c.size else "    ? GB"
 
 
 def _log(msg: str) -> None:

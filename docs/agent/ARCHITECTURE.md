@@ -154,3 +154,11 @@ it cannot match and returns a same-named film from another decade as confident, 
 `ent acquire get` refuses a match whose year contradicts the typed one; and film extras
 ("Behind the Scenes") scored as the film, so the matcher now refuses them. The Telegram
 sources were not run live in this phase.
+
+**Phase 2 done 25 Oct 2026.** `agent/decide.py` turns a plan into a pick or a pause;
+`agent.get` asks a `choose` callback on a pause, the CLI prompts, and with nobody to ask a
+pause is a refusal that names the reason. `--dry-run` prints what the rule would do. The
+two open review items from phase 1 are closed: a copy of unknown size is stopped mid-download
+once it outgrows the cap or the disk reserve, and the year guard has a test. Writing the
+table's tests found that a missing year or language never pushed a score under 13, and that
+the matcher refused labels like "Vikram TAMIL 1080p"; both are fixed (see `LEARNINGS.md`).

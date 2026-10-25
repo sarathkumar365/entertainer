@@ -74,6 +74,7 @@ async def execute(
     staging: Path,
     *,
     reserve_gb: float,
+    max_bytes: int | None = None,
     max_tries: int = 3,
     progress: Progress | None = None,
     log: Log = print,
@@ -93,8 +94,11 @@ async def execute(
         tried += 1
         part = staging / f"{target.folder}.part"
         log(f"trying [{cand.source}] {cand.label} ({_gb(cand.size)}, score {cand.score:.1f})")
+        budget = shutil.disk_usage(staging).free - int(reserve_gb * GB)
+        if max_bytes:
+            budget = min(budget, max_bytes)
         try:
-            await sources[cand.source].fetch(cand, part, progress)
+            await sources[cand.source].fetch(cand, part, _guarded(progress, budget))
         except Exception as e:  # noqa: BLE001 — any source failure means try the next
             log(f"  download failed: {e}")
             part.unlink(missing_ok=True)
@@ -119,8 +123,30 @@ async def execute(
     raise NotAcquired(f"Every candidate for {target.folder} failed to download or verify.")
 
 
+class _OverBudget(Exception):
+    pass
+
+
+def _guarded(progress: Progress | None, budget: int) -> Progress:
+    """Abort a download once it outgrows the cap or the disk.
+
+    A bot's button often names no size, so the checks before a download pass a
+    copy of unknown size; this is the same check made with the bytes the source
+    reports while it downloads, and the total as soon as the source knows it.
+    """
+
+    def report(done: int, total: int) -> None:
+        if max(done, total or 0) > budget:
+            raise _OverBudget(f"{_gb(max(done, total or 0))} is over the {_gb(budget)} allowed")
+        if progress:
+            progress(done, total)
+
+    return report
+
+
 def _fits(where: Path, size: int | None, reserve_gb: float) -> bool:
-    return not size or shutil.disk_usage(where).free - size >= reserve_gb * GB
+    # An unknown size still needs some room; how much is checked while it downloads.
+    return shutil.disk_usage(where).free - (size or 1) >= reserve_gb * GB
 
 
 def _gb(n: int | None) -> str:
