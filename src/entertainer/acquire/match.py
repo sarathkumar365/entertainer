@@ -14,6 +14,8 @@ import unicodedata
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+from ..config import PRIORITY_LANGUAGES
+
 VIDEO_EXTS = frozenset({"mkv", "mp4", "avi", "m4v", "mov", "webm", "ts", "mpg", "mpeg", "ogv"})
 # Extras carry the film's full title and year, and score as the film until
 # ffprobe rejects them after a wasted download and a used-up try.
@@ -26,6 +28,8 @@ _JUNK = re.compile(
 # 1080p first: 2160p roughly quadruples disk for a difference most home screens
 # do not show, and the disk budget is the scarcer resource for an unsupervised agent.
 _RESOLUTION_RANK = {"1080p": 3.0, "2160p": 2.0, "720p": 2.0, "576p": 1.0, "480p": 0.5}
+# guessit finds "Hindi" but not "Tamil", so languages are read off the label directly.
+_LANGUAGE = re.compile(r"\b(" + "|".join(PRIORITY_LANGUAGES.values()) + r")\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,11 @@ class Candidate:
     ext: str = ""
     score: float = 0.0
     why: str = ""
+    # What the label claims, kept so the decision rule can ask whether the
+    # leading candidates are the same film. Empty or None means the label is silent.
+    title: str = ""
+    year: int | None = None
+    lang: str = ""
 
 
 def norm(s: str) -> str:
@@ -78,7 +87,9 @@ def score(target: Target, cand: Candidate) -> Candidate:
     if info.get("type") == "episode":
         return _refuse(cand, "looks like an episode")
 
-    got = norm(str(info.get("title") or ""))
+    # With no year to stop it, guessit reads "Vikram TAMIL 1080p" as the title
+    # "Vikram TAMIL", which then fails to match the film it names.
+    got = norm(_LANGUAGE.sub(" ", str(info.get("title") or "")))
     wanted = [norm(t) for t in (target.title, *target.alt_titles) if t]
     sim = max((SequenceMatcher(None, got, w).ratio() for w in wanted), default=0.0)
     if sim < 0.85:
@@ -101,8 +112,21 @@ def score(target: Target, cand: Candidate) -> Candidate:
         s -= 5.0
     cand.ext = ext or cand.ext
     cand.score = s
+    # A label that spells any of the film's names exactly is the film; only a
+    # near-miss keeps its own spelling, so two near-misses can be told apart.
+    cand.title = wanted[0] if sim >= 0.97 else got
+    cand.year = int(year) if year else None
+    cand.lang = _language(cand.label, target.language)
     cand.why = f"{info.get('screen_size') or '?'} {info.get('video_codec') or ''}".strip()
     return cand
+
+
+def _language(label: str, wanted: str | None) -> str:
+    named = {m.lower() for m in _LANGUAGE.findall(label)}
+    # A multi-audio copy that carries the original is the original, not a conflict.
+    if wanted and wanted.lower() in named:
+        return wanted.lower()
+    return ",".join(sorted(named))
 
 
 def _refuse(cand: Candidate, why: str) -> Candidate:

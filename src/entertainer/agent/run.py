@@ -4,9 +4,9 @@ The CLI calls these directly today; the worker thread will call the same
 functions in phase 3, so the web app and the CLI stay two front ends over one
 code path.
 
-Until the decision rule lands (phase 2) the pick is simply "best score first,
-within the size cap". Over-cap copies are refused here rather than offered;
-phase 2 turns that refusal into a pause.
+When the decision rule pauses, ``get`` asks ``choose``: the CLI prompts, and
+the worker (phase 3) will park the job until the web page answers. With no one
+to ask, a pause is a refusal that says why.
 """
 
 from __future__ import annotations
@@ -21,8 +21,11 @@ from ..acquire.sources import Progress
 from ..config import AcquireSettings, acquire_settings
 from ..errors import CannotAcquire, NotAcquired
 from . import library
+from .decide import Decision, decide
 
 Log = Callable[[str], None]
+# Shown a paused decision; returns the copy to take, or None to give up.
+Choose = Callable[[Decision], Candidate | None]
 
 
 @dataclass
@@ -66,6 +69,7 @@ async def search(
 async def get(
     target: Target, settings: AcquireSettings | None = None, *,
     sources: list[str] | None = None, progress: Progress | None = None, log: Log = print,
+    choose: Choose | None = None,
 ) -> Acquired:
     s = settings or acquire_settings()
     ready(s, sources)
@@ -74,26 +78,27 @@ async def get(
         raise NotAcquired(f"{target.folder} is already in the library: {have}")
     async with open_sources(s, sources) as live:
         p = await plan(target, live, log)
-        picks = _within_cap(p, s.max_gb)
+        picks = _picks(decide(p, s.max_gb), target, choose, log)
+        # A copy the user accepted over the cap is theirs to take; the disk check still holds.
+        cap = None if any(c.size and c.size > s.max_gb * GB for c in picks) \
+            else int(s.max_gb * GB)
         fetched = await execute(
-            target, picks, live, s.staging, reserve_gb=s.reserve_gb, progress=progress, log=log
+            target, picks, live, s.staging, reserve_gb=s.reserve_gb, max_bytes=cap,
+            progress=progress, log=log,
         )
     dest = library.file_into(fetched, target, s.library_dir)
     library.refresh_jellyfin(s, log)
     return Acquired(dest, fetched.candidate, fetched.duration_min)
 
 
-def _within_cap(p: Plan, max_gb: float) -> list[Candidate]:
-    usable = p.usable
-    if not usable:
-        refused = "; ".join(sorted({c.why for c in p.candidates})[:5]) or "nothing found"
-        failed = "".join(f" {n} failed ({e})." for n, e in p.errors.items())
-        raise NotAcquired(f"No source had {p.target.folder}. Refused: {refused}.{failed}")
-    fits = [c for c in usable if not (c.size and c.size > max_gb * GB)]
-    if not fits:
-        smallest = min(c.size or 0 for c in usable)
-        raise NotAcquired(
-            f"Every copy of {p.target.folder} is over the {max_gb:g} GB cap; the smallest is "
-            f"{smallest / GB:.2f} GB. Raise ENTERTAINER_ACQUIRE_MAX_GB to take it."
-        )
-    return fits
+def _picks(d: Decision, target: Target, choose: Choose | None, log: Log) -> list[Candidate]:
+    if not d.paused:
+        log(f"picked: {d.reason}")
+        return d.picks
+    if choose is None:
+        raise NotAcquired(f"{target.folder} needs a choice: {d.reason}.")
+    chosen = choose(d)
+    if chosen is None:
+        raise NotAcquired(f"{target.folder}: no copy chosen.")
+    # The user picked this file; if it fails to verify, guessing another is not ours to do.
+    return [chosen]
